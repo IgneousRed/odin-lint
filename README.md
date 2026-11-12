@@ -167,5 +167,13 @@ diagnostics, with no timings, throughput benchmarks, or performance thresholds.
 
 Released under the [Zero-Clause BSD license](LICENSE). You may use, copy, modify,
 and distribute it for any purpose, with or without a fee. The software is provided
-as is, without warranty. This is a personal project; support, continued maintenance,
-and compatibility with future compiler releases are not promised.
+as is, without warranty.
+
+This is a personal tool maintained for the author's own projects. Reproducible bug
+reports and small pull requests are welcome; responses, acceptance and future
+development are discretionary. Support, continued maintenance and compatibility
+with future compiler releases are not promised.
+
+Releases distribute source with fixed version tags. Consumers use the existing
+runner and full commit-SHA pins to build the chosen revision. See
+[publishing and review policy](docs/publishing.md).

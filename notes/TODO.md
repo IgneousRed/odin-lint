@@ -23,17 +23,14 @@ their unfinished lifetime-analysis backlogs are retired, not deferred work.
 ## Workflow and distribution
 
 1. **Finish public distribution of 0.7.1. Confidence: 10/10.**
-   Publish the sanitized source with fresh history. Keep the hosted repository
-   private until old private development commits are no longer retrievable;
-   rewriting refs alone does not purge hosted cached views. Confirm both hosted
-   verification jobs and a fresh unauthenticated installation before release.
-2. **Choose an external review policy. Confidence: 10/10.**
-   No reviewer or mandatory external review policy has been selected. Resolve
-   who reviews which changes and what happens when unavailable.
-3. **Validate future hosts/compiler upgrades deliberately. Confidence: 9/10.**
+   The sanitized source and fresh history are prepared. Confirm both hosted
+   verification jobs, make the repository public and check a fresh unauthenticated
+   installation before release. Follow `docs/publishing.md` for the agreed
+   participation, review and source distribution policy.
+2. **Validate future hosts/compiler upgrades deliberately. Confidence: 9/10.**
    Odin dev-2026-11a `9a6991685` is pinned. Preserve compiler checks before lint and
    existing targets/collections/defines. Reproduced compiler crashes need compiler
    evidence; do not weaken vet/style checks or treat skipped lint as clean.
-4. **Decide preservation before a stateful mode. Confidence: 8/10.**
+3. **Decide preservation before a stateful mode. Confidence: 8/10.**
    The current CLI persists no analysis state. A future daemon/incremental/editor
    mode needs an explicit preservation decision and separate scope approval.

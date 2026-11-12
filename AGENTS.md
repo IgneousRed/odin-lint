@@ -38,6 +38,10 @@ rule switches. Missing inputs and parse/configuration failures remain errors.
 
 ## Verification and distribution
 
+The project owner is the sole maintainer and final reviewer. External review is
+optional. Reproducible bug reports and small pull requests are welcome; responses,
+acceptance and future development remain at the maintainer's discretion.
+
 Target sources must already pass their actual Odin compiler checks. The linter
 must not invoke the compiler or duplicate syntax, type, vet/style or unused-code
 diagnostics. Use maximal compatible first-party vetting and strict style with
@@ -55,6 +59,9 @@ Consumers fetch an exact GitHub commit with the runner from the same commit,
 record the full revision in the root lock, and cache only under ignored `.work/`.
 Keep runner and lock synchronized during explicit upgrades. No floating branch,
 automatic upgrade, sibling checkout or home-directory skill is required.
+Distribute source releases with fixed version tags and full commit-SHA pins.
+Compiler checks, self-lint and the full suite remain required before publishing
+code changes, including changes accepted from contributors.
 
 Keep open work/decisions in `notes/TODO.md` and out-of-scope proposals in `notes/REWORKS.md`.
 Record agreed workflow policy here; implemented behavior belongs in `docs/`.

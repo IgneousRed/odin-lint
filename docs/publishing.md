@@ -6,6 +6,22 @@ use, copying, modification and redistribution, with or without a fee, as is and
 without warranty. This is a personal project with no promise of support,
 continued maintenance or future compatibility.
 
+## Participation and review
+
+IgneousRed is the sole maintainer and decides the project's direction and which
+changes to accept. Reproducible bug reports and small pull requests are welcome;
+responses, acceptance and future development are discretionary.
+
+The maintainer reviews changes before publishing them. External review is optional
+and does not block publication when unavailable. Compiler checks, self-lint and
+the full Odin/CLI suite, including independent distribution tests, remain required
+for code changes.
+
+Releases distribute source with fixed version tags and full commit-SHA pins.
+Consumers build their chosen revision with the existing runner and documented
+Odin compiler. Prebuilt binaries, installers and a Marketplace action are outside
+the current distribution scope.
+
 ## Publishing
 
 Publish only the self-contained source, tests and project documentation. Exclude
