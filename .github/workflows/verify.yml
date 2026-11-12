@@ -1,0 +1,58 @@
+name: Verify
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: verify-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    name: Verify (${{ matrix.runner }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            asset: odin-linux-amd64-dev-2026-11a.tar.gz
+            sha256: 65c9f6e97d6f8a30930e151f270ce5aeaa98fe8b2ba49fe067394e2af04f7618
+          - runner: macos-15
+            asset: odin-macos-arm64-dev-2026-11a.tar.gz
+            sha256: fa10eee280c8786758e3ff0b8fdd9355e1c9447b1f0b8c72764e25ee4ebc3e22
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: '3.11'
+      - name: Install pinned Odin
+        shell: bash
+        env:
+          ODIN_ASSET: ${{ matrix.asset }}
+          ODIN_SHA256: ${{ matrix.sha256 }}
+        run: |
+          mkdir -p .work/odin
+          curl --fail --location --retry 3 --output .work/odin.tar.gz \
+            "https://github.com/odin-lang/Odin/releases/download/dev-2026-11a/$ODIN_ASSET"
+          python3 - <<'PY'
+          import hashlib
+          import os
+          from pathlib import Path
+          archive = Path('.work/odin.tar.gz')
+          if hashlib.sha256(archive.read_bytes()).hexdigest() != os.environ['ODIN_SHA256']:
+              raise SystemExit('Odin archive checksum mismatch')
+          PY
+          tar -xzf .work/odin.tar.gz -C .work/odin --strip-components=1
+          echo "$GITHUB_WORKSPACE/.work/odin" >> "$GITHUB_PATH"
+      - name: Verify
+        run: make verify
