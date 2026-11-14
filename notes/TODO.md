@@ -22,7 +22,7 @@ their unfinished lifetime-analysis backlogs are retired, not deferred work.
 
 ## Workflow and distribution
 
-1. **Finish public distribution of 0.7.1. Confidence: 10/10.**
+1. **Finish public distribution of 0.7.2. Confidence: 10/10.**
    The sanitized source and fresh history are prepared. Confirm both hosted
    verification jobs, make the repository public and check a fresh unauthenticated
    installation before release. Follow `docs/publishing.md` for the agreed
