@@ -22,15 +22,10 @@ their unfinished lifetime-analysis backlogs are retired, not deferred work.
 
 ## Workflow and distribution
 
-1. **Finish public distribution of 0.7.2. Confidence: 10/10.**
-   The sanitized source and fresh history are prepared. Confirm both hosted
-   verification jobs, make the repository public and check a fresh unauthenticated
-   installation before release. Follow `docs/publishing.md` for the agreed
-   participation, review and source distribution policy.
-2. **Validate future hosts/compiler upgrades deliberately. Confidence: 9/10.**
+1. **Validate future hosts/compiler upgrades deliberately. Confidence: 9/10.**
    Odin dev-2026-11a `9a6991685` is pinned. Preserve compiler checks before lint and
    existing targets/collections/defines. Reproduced compiler crashes need compiler
    evidence; do not weaken vet/style checks or treat skipped lint as clean.
-3. **Decide preservation before a stateful mode. Confidence: 8/10.**
+2. **Decide preservation before a stateful mode. Confidence: 8/10.**
    The current CLI persists no analysis state. A future daemon/incremental/editor
    mode needs an explicit preservation decision and separate scope approval.
