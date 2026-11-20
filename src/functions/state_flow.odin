@@ -5,7 +5,9 @@ package functions
 
 // ---------------- Odin ----------------
 
+import "base:runtime"
 import "core:fmt"
+import "core:mem"
 import "core:odin/ast"
 import "core:slice"
 import "core:strings"
@@ -71,7 +73,7 @@ State_Access :: struct {
 	resources: [dynamic]State_Location,
 	// Immutable child snapshots survive value copies. The empty key summarizes
 	// collection elements; named keys describe record fields.
-	fields: map[string]State_Access,
+	fields: map[string]^State_Access,
 }
 
 @(private)
@@ -83,6 +85,12 @@ State_Location :: struct {root: ^ast.Expr, path: string}
 Value_Zero :: enum {Unset, Unknown, Zero, Nonzero}
 
 
+
+// ---------------- File ----------------
+
+// The recursive widening path lives on the call stack; no heap-backed set is
+// needed for the short ancestor chains of one join.
+State_Ancestor :: struct {type: ^ast.Expr, parent: ^State_Ancestor}
 
 // -------------------------------- Procedures --------------------------------
 
@@ -97,6 +105,42 @@ visit_state_flow :: proc(visitor: ^ast.Visitor, node: ^ast.Node) -> ^ast.Visitor
 	if !scoped {return nil}
 	#partial switch n in node.derived {
 	case ^ast.Proc_Lit:
+		// A body needs its working snapshots only until its summary is saved.
+		// Nested procedures save into the pass allocator too, never into their
+		// enclosing body's scratch arena. This bounds memory by active bodies.
+		model := r.semantics
+		procedure_id := r.by_literal[n]
+		owner := model.owner
+		if model.infer && owner < 0 && !model.pending[procedure_id] {return nil}
+		if owner < 0 {model.owner = procedure_id; model.pending[procedure_id] = false}
+		previous_changed := model.changed
+		model.changed = false
+		defer {
+			if model.infer && model.changed {
+				model.pending[model.owner] = true
+				for dependent in model.dependents[procedure_id] {model.pending[dependent] = true}
+			}
+			model.changed = model.changed || previous_changed
+			model.owner = owner
+		}
+		allocator := context.allocator
+		transient: mem.Dynamic_Arena
+		heap := runtime.heap_allocator()
+		mem.dynamic_arena_init(&transient, block_allocator = heap, array_allocator = heap, block_size = INFERENCE_BLOCK_SIZE, out_band_size = INFERENCE_BLOCK_SIZE/8)
+		context.allocator = mem.dynamic_arena_allocator(&transient)
+		if model.infer {model.facts[procedure_id] = clone_semantic_facts(model.facts[procedure_id:procedure_id+1])[0]}
+		first_diagnostic := len(check.diagnostics^)
+		defer {
+			context.allocator = model.allocator
+			if model.infer {model.facts[procedure_id] = clone_semantic_facts(model.facts[procedure_id:procedure_id+1])[0]}
+			for &diagnostic in check.diagnostics^[first_diagnostic:] {
+				diagnostic.message = strings.clone(diagnostic.message)
+				diagnostic.rule = strings.clone(diagnostic.rule)
+				diagnostic.pos.file = strings.clone(diagnostic.pos.file)
+			}
+			context.allocator = allocator
+			mem.dynamic_arena_destroy(&transient)
+		}
 		// Procedure declarations do not execute in source order. Keep captures
 		// local to this body and resolve globals from their saved initializers.
 		before := check^
@@ -547,7 +591,7 @@ visit_state_flow :: proc(visitor: ^ast.Visitor, node: ^ast.Node) -> ^ast.Visitor
 		if !check.publication_uncertain && !mutates && !destroys && !operation.rng && r.semantics != nil && certain && len(targets) > 0 {
 			readonly = true
 			for target in targets {
-				facts := r.semantics.facts[target]
+				facts := callee_facts(check, target)
 				if r.procedures[target].literal.body == nil || facts.effects != {} {readonly = false}
 				for access in facts.accesses {if access.kind == .Write || access.kind == .Destroy || access.kind == .Invoke {readonly = false}}
 			}
@@ -584,12 +628,7 @@ visit_state_flow :: proc(visitor: ^ast.Visitor, node: ^ast.Node) -> ^ast.Visitor
 					if argument := operation_argument(operation, call, "err"); argument != nil {handler = state_access(check, argument, scope, 0)}
 					if handler.zero == .Zero {handler.nil_value, handler.callback_unknown = true, false}
 					record_store(check, project_access(r, destination, "err"), handler, initializes = true, site = call.pos)
-					for index in 0..=len(destination.resources) {
-						resource := destination.resource
-						if index < len(destination.resources) {resource = destination.resources[index]}
-						memo := make(Field_Transforms)
-						for id, binding in check.bindings {check.bindings[id], _ = store_state_path(r, binding, resource, {"err"}, handler, len(destination.resources) > 0, &memo)}
-					}
+					store_bindings(check, destination, {"err"}, handler)
 					apply_callback(check, handler, nil, call.pos)
 				} else if operation.write == "t" {
 					lexer := state_access(check, operation_argument(operation, call, "t"), scope, 0)
@@ -616,7 +655,7 @@ visit_state_flow :: proc(visitor: ^ast.Visitor, node: ^ast.Node) -> ^ast.Visitor
 			// Builtin container mutators change the referenced backing storage,
 			// rather than merely replacing a private descriptor slot.
 			if mutates && namespace == "" && access.pointer && access.shared {
-				if referent, known := access.fields["^"]; known {access = referent} else {access = access_path(access, "^"); access.pointer = false}
+				if referent, known := access.fields["^"]; known {access = referent^} else {access = access_path(access, "^"); access.pointer = false}
 			}
 			record_access(check, access, .Destroy if destroys else .Write, enforce_transaction = true)
 			if mutates && r.semantics != nil && r.semantics.infer && check.caller >= 0 && access.type != nil {
@@ -632,12 +671,7 @@ visit_state_flow :: proc(visitor: ^ast.Visitor, node: ^ast.Node) -> ^ast.Visitor
 			destination := state_access(check, operation_argument(operation, call, operation.write), scope, 0)
 			value := decoded_output(check.r, destination, &call.node)
 			record_store(check, destination, value, conditional = true, site = call.pos)
-			for index in 0..=len(destination.resources) {
-				resource := destination.resource
-				if index < len(destination.resources) {resource = destination.resources[index]}
-				memo := make(Field_Transforms)
-				for id, binding in check.bindings {check.bindings[id], _ = store_state_path(check.r, binding, resource, nil, value, true, &memo)}
-			}
+			store_bindings(check, destination, nil, value, true)
 		}
 		// Invoke known callbacks for their state writes and effects. Spawning work
 		// does not create a generic ownership transfer or consume its arguments.
@@ -645,7 +679,7 @@ visit_state_flow :: proc(visitor: ^ast.Visitor, node: ^ast.Node) -> ^ast.Visitor
 		if r.semantics == nil {return nil}
 		counter_condition := Counter_Condition{}
 		if len(targets) == 1 && certain && (!indirect_callee_call || len(indirect_callee.origins) == 0 && !indirect_callee.callback_unknown && indirect_callee.callback_effects == {}) {
-			facts := r.semantics.facts[targets[0]]
+			facts := callee_facts(check, targets[0])
 			if len(facts.result_types) == 1 {
 				result := access_type(r, facts.result_types[0], r.node_scopes[&r.procedures[targets[0]].literal.type.node], 0)
 				if name, named := binding_name(result.type); named && name == "bool" {
@@ -675,7 +709,7 @@ visit_state_flow :: proc(visitor: ^ast.Visitor, node: ^ast.Node) -> ^ast.Visitor
 							continue
 						}
 						if len(callback.callables) != 1 || callback.callback_unknown || len(callback.origins) > 0 || callback.callback_effects != {} {counter_condition.refine = false; continue}
-						callback_facts := check.r.semantics.facts[callback.callables[0]]
+						callback_facts := callee_facts(check, callback.callables[0])
 						if callback_facts.unknown_boolean_return || len(callback_facts.invocations) > 0 {counter_condition.refine = false; continue}
 						all := mapped_counter_effects(check, callback_facts.counters[:], callback_facts.parameters[:], actuals)
 						append(&counter_condition.effects, ..all[:])
@@ -697,7 +731,7 @@ visit_state_flow :: proc(visitor: ^ast.Visitor, node: ^ast.Node) -> ^ast.Visitor
 
 		for target in targets {
 			procedure := r.procedures[target]
-			facts := r.semantics.facts[target]
+			facts := callee_facts(check, target)
 			if procedure.literal.body == nil {record_effect(check, .Unknown, call.pos)}
 			for effect in facts.effects {record_effect(check, effect, call.pos)}
 			arguments := call_arguments(procedure.literal, call)
@@ -840,9 +874,9 @@ state_access :: proc(check: ^State_Flow, expression: ^ast.Expr, scope, depth: in
 			if access.slot.root != nil {access.resource, access.resources = access.slot, nil}
 			access.protected, access.published, access.immutable = access.slot_protected, access.slot_published, access.slot_immutable
 			access.origins = access.slot_origins
-			access.fields = make(map[string]State_Access)
+			access.fields = make(map[string]^State_Access)
 			for name, child in value.fields {access.fields[name] = child}
-			access.fields["^"] = value
+			access.fields["^"] = new_clone(value)
 			access.pointer, access.live, access.addressed, access.slot = true, false, true, {}
 			// An embedded local owner keeps its role even in a non-local session slot.
 			access.zero, access.local, access.nil_value = .Nonzero, value.local || value.slot_local, false
@@ -878,16 +912,26 @@ state_access :: proc(check: ^State_Flow, expression: ^ast.Expr, scope, depth: in
 		access.nil_value = false
 		access.zero = .Zero if len(n.elems) == 0 else .Unknown
 		access.resource.root = expression
-		if access.fields == nil {access.fields = make(map[string]State_Access)}
+		if access.fields == nil {access.fields = make(map[string]^State_Access)}
 		record: ^ast.Struct_Type
 		if access.type != nil {record, _ = access.type.derived.(^ast.Struct_Type)}
-		for element, i in n.elems {
+		field_index, field_name := 0, 0
+		for element in n.elems {
 			value, name := element, ""
 			if field, ok := element.derived.(^ast.Field_Value); ok {
 				value = field.value
 				name, _ = binding_name(field.field)
-			} else if record != nil && record.fields != nil && i < len(record.fields.list) && len(record.fields.list[i].names) == 1 {
-				name, _ = binding_name(record.fields.list[i].names[0])
+			} else if record != nil && record.fields != nil {
+				// One parser field can declare several names. Positional values
+				// advance through those names, not through declaration groups.
+				for field_index < len(record.fields.list) && field_name >= len(record.fields.list[field_index].names) {
+					field_index += 1
+					field_name = 0
+				}
+				if field_index < len(record.fields.list) {
+					name, _ = binding_name(record.fields.list[field_index].names[field_name])
+					field_name += 1
+				}
 			}
 			child := state_access(check, value, scope, depth+1)
 			known_map := false
@@ -895,15 +939,14 @@ state_access :: proc(check: ^State_Flow, expression: ^ast.Expr, scope, depth: in
 			if known_map {
 				if field, keyed := element.derived.(^ast.Field_Value); keyed {
 					key := copy_state_value(r, state_access(check, field.field, scope, depth+1), depth+1)
-					access.fields["$key"], _ = join_state_access(access.fields["$key"], key)
+					join_state_field(&access.fields, "$key", key)
 				}
 			}
 			if record != nil || access.type == nil || name != "" && !known_map {
-				if name != "" {access.fields[name] = copy_state_value(r, fit_state_value(child, field_access(r, access, name, depth+1), check, depth+1), depth+1)}
+				if name != "" {access.fields[name] = new_clone(copy_state_value(r, fit_state_value(child, field_access(r, access, name, depth+1), check, depth+1), depth+1))}
 			} else {
 				child = copy_state_value(r, fit_state_value(child, element_access(r, access, depth+1), check, depth+1), depth+1)
-				previous := access.fields[""]
-				access.fields[""], _ = join_state_access(previous, child)
+				join_state_field(&access.fields, "", child)
 			}
 		}
 		return
@@ -916,7 +959,7 @@ state_access :: proc(check: ^State_Flow, expression: ^ast.Expr, scope, depth: in
 			}
 			if certain && len(targets) == 1 {
 				procedure := r.procedures[targets[0]]
-				facts := r.semantics.facts[targets[0]]
+				facts := callee_facts(check, targets[0])
 				arguments := call_arguments(procedure.literal, n)
 				if result_index < len(facts.results) {access = instantiate_access(check, facts.results[result_index], facts.parameters[:], arguments[:], scope, expression)}
 				if condition, saved := check.counter_conditions[expression]; saved && result_index == 0 {
@@ -948,27 +991,27 @@ state_access :: proc(check: ^State_Flow, expression: ^ast.Expr, scope, depth: in
 		if namespace == "core:encoding/json" {
 			if member == "make_tokenizer" {
 				data := state_access(check, operation_argument(operation, n, "data"), scope, depth+1)
-				access.fields = make(map[string]State_Access)
-				access.fields["data"] = data
+				access.fields = make(map[string]^State_Access)
+				access.fields["data"] = new_clone(data)
 				return
 			}
 			if slice.contains([]string{"make_parser", "make_parser_from_string", "make_parser_from_bytes"}, member) {
 				data := state_access(check, operation_argument(operation, n, "data"), scope, depth+1)
-				lexer := State_Access{fields = make(map[string]State_Access)}
-				lexer.fields["data"] = data
-				access.fields = make(map[string]State_Access)
-				access.fields["tok"] = lexer
-				token := State_Access{fields = make(map[string]State_Access)}
-				token.fields["text"] = data
-				access.fields["curr_token"] = token
-				access.fields["allocator"] = state_access(check, operation_argument(operation, n, "allocator"), scope, depth+1)
+				lexer := State_Access{fields = make(map[string]^State_Access)}
+				lexer.fields["data"] = new_clone(data)
+				access.fields = make(map[string]^State_Access)
+				access.fields["tok"] = new_clone(lexer)
+				token := State_Access{fields = make(map[string]^State_Access)}
+				token.fields["text"] = new_clone(data)
+				access.fields["curr_token"] = new_clone(token)
+				access.fields["allocator"] = new_clone(state_access(check, operation_argument(operation, n, "allocator"), scope, depth+1))
 				return
 			}
 			if member == "get_token" {
 				if result_index != 0 {return}
 				data := project_access(r, state_access(check, operation_argument(operation, n, "t"), scope, depth+1), "data")
-				access.fields = make(map[string]State_Access)
-				access.fields["text"] = data
+				access.fields = make(map[string]^State_Access)
+				access.fields["text"] = new_clone(data)
 				return
 			}
 			if slice.contains([]string{"parse_value", "parse", "parse_string", "parse_bytes"}, member) {
@@ -983,8 +1026,8 @@ state_access :: proc(check: ^State_Flow, expression: ^ast.Expr, scope, depth: in
 				argument := operation_argument(operation, n, "state")
 				data := state_access(check, argument, scope, depth+1)
 				access.ambient = argument == nil || data.nil_value || data.ambient
-				access.fields = make(map[string]State_Access)
-				access.fields["data"], access.fields["procedure"] = data, State_Access{callback_modeled = true}
+				access.fields = make(map[string]^State_Access)
+				access.fields["data"], access.fields["procedure"] = new_clone(data), new_clone(State_Access{callback_modeled = true})
 				return
 			}
 			if member == "perm" {
@@ -994,8 +1037,8 @@ state_access :: proc(check: ^State_Flow, expression: ^ast.Expr, scope, depth: in
 		}
 		if operation.result_alias {return state_access(check, operation_argument(operation, n, operation.write), scope, depth+1)}
 		if namespace == "core:odin/parser" && member == "default_parser" {
-			access.fields = make(map[string]State_Access)
-			access.fields["err"], access.fields["warn"] = State_Access{callback_effects = {.IO}}, State_Access{callback_effects = {.IO}}
+			access.fields = make(map[string]^State_Access)
+			access.fields["err"], access.fields["warn"] = new_clone(State_Access{callback_effects = {.IO}}), new_clone(State_Access{callback_effects = {.IO}})
 			return
 		}
 		clone := (namespace == "core:slice" || namespace == "core:strings") && (member == "clone" || member == "clone_to_dynamic")
@@ -1009,8 +1052,8 @@ state_access :: proc(check: ^State_Flow, expression: ^ast.Expr, scope, depth: in
 				access.protected, access.live, access.immutable, access.published = false, false, false, false
 				access.resources = nil
 				access.origins = nil
-				access.fields = make(map[string]State_Access)
-				if namespace == "core:slice" {access.fields[""] = copy_state_value(r, element_access(r, original, depth+1), depth+1)}
+				access.fields = make(map[string]^State_Access)
+				if namespace == "core:slice" {access.fields[""] = new_clone(copy_state_value(r, element_access(r, original, depth+1), depth+1))}
 			}
 
 			access.resource = State_Location{root = expression}
@@ -1061,7 +1104,7 @@ fit_state_value :: proc(value, expected: State_Access, check: ^State_Flow = nil,
 		initialized.zero, initialized.resource = result.zero, result.resource
 		for name, child in value.fields {
 			field_type := element_access(check.r, initialized, depth+1) if name == "" else field_access(check.r, initialized, name, depth+1)
-			initialized.fields[name] = fit_state_value(child, field_type, check, depth+1)
+			initialized.fields[name] = new_clone(fit_state_value(child^, field_type, check, depth+1))
 		}
 		result = initialized
 	}
@@ -1075,7 +1118,7 @@ field_access :: proc(r: ^References, base: State_Access, name: string, depth: in
 	// Local-owner stores update the referent snapshot, not the address wrapper.
 	if base.addressed && base.local {if value, known := base.fields["^"]; known {base.fields = value.fields}}
 	if field, set := base.fields[name]; set {
-		access = field
+		access = field^
 		access = field_slot(access, base, name)
 		access.live = base.pointer || base.live
 		access.local = access.local || base.local && !access.pointer
@@ -1147,7 +1190,7 @@ field_access :: proc(r: ^References, base: State_Access, name: string, depth: in
 @(private)
 element_access :: proc(r: ^References, base: State_Access, depth: int) -> (access: State_Access) {
 	if child, set := base.fields[""]; set {
-		access = child
+		access = child^
 		access = field_slot(access, base, "[]", true)
 		// Copied inline elements live in the destination array's slots. Their
 		// pointers/containers still retain the source's independent referents.
@@ -1264,7 +1307,7 @@ type_property :: proc(r: ^References, expression: ^ast.Expr, scope: int, local_o
 }
 
 @(private)
-join_state_access :: proc(left, right: State_Access, ancestors: ^map[^ast.Expr]bool = nil) -> (result: State_Access, changed: bool) {
+join_state_access :: proc(left, right: State_Access, ancestors: ^State_Ancestor = nil) -> (result: State_Access, changed: bool) {
 	result = left
 	if left.zero == .Unset {result.condition, result.condition_version, result.condition_negated = right.condition, right.condition_version, right.condition_negated} else if left.condition != right.condition || left.condition_version != right.condition_version || left.condition_negated != right.condition_negated {result.condition, result.condition_version, result.condition_negated = nil, nil, false}
 	// Compare the meet with the previous value. A missing retained proof remains
@@ -1316,10 +1359,10 @@ join_state_access :: proc(left, right: State_Access, ancestors: ^map[^ast.Expr]b
 	}
 	if ancestors == nil && len(right.fields) == 0 {return}
 	ancestors := ancestors
-	storage: map[^ast.Expr]bool
-	if ancestors == nil {storage = make(map[^ast.Expr]bool); ancestors = &storage}
+	ancestor := State_Ancestor{result.type, ancestors}
 	if result.type != nil {
-		if ancestors^[result.type] {
+		for parent := ancestors; parent != nil; parent = parent.parent {
+			if parent.type != result.type {continue}
 			borrowed_left := contains_protected_state(left)
 			borrowed_right := contains_protected_state(right)
 			result.protected = result.protected || borrowed_left || borrowed_right
@@ -1327,25 +1370,22 @@ join_state_access :: proc(left, right: State_Access, ancestors: ^map[^ast.Expr]b
 			result.fields = nil
 			return result, changed || len(left.fields) > 0 || !left.uncertain || result.protected != left.protected
 		}
-		ancestors^[result.type] = true
+		ancestors = &ancestor
 	}
-	// The marker spans recursion over fields. An if-local defer would remove
-	// it before that recursion, leaving recursive return trees unbounded.
-	defer {if result.type != nil {delete_key(ancestors, result.type)}}
 	if len(right.fields) == 0 || field_identity(left.fields) == field_identity(right.fields) {return}
 	fields := left.fields
 	fields_copied := false
 	for name, field in right.fields {
 		previous, set := fields[name]
-		joined, different := field, true
-		if set {joined, different = join_state_access(previous, field, ancestors)}
+		joined, different := field^, true
+		if set {joined, different = join_state_access(previous^, field^, ancestors)}
 		if !different {continue}
 		if !fields_copied {
-			fields = make(map[string]State_Access)
+			fields = make(map[string]^State_Access, len(left.fields)+len(right.fields))
 			for key, child in left.fields {fields[key] = child}
 			fields_copied = true
 		}
-		fields[name], changed = joined, true
+		fields[name], changed = new_clone(joined), true
 	}
 	result.fields = fields
 	return
@@ -1397,7 +1437,7 @@ finish_state_return :: proc(check: ^State_Flow, visitor: ^ast.Visitor, n: ^ast.R
 				if !slice.contains(facts.returned_predicates[:], predicate) {append(&facts.returned_predicates, predicate); r.semantics.changed = true}
 			} else {
 				unrelated := value.zero == .Zero || value.zero == .Nonzero || len(value.origins) > 0
-				if saved && condition.target >= 0 {unrelated = unrelated || r.semantics.facts[condition.target].unrelated_boolean_return}
+				if saved && condition.target >= 0 {unrelated = unrelated || callee_facts(check, condition.target).unrelated_boolean_return}
 				if unrelated && !facts.unrelated_boolean_return {facts.unrelated_boolean_return = true; r.semantics.changed = true}
 			}
 		}
@@ -1472,12 +1512,7 @@ assign_state_value :: proc(check: ^State_Flow, expression: ^ast.Expr, value: Sta
 			id := ids[0]
 			if check.referents[id] {
 				previous := state_access(check, expression, scope, depth+1)
-				for index in 0..=len(previous.resources) {
-					resource := previous.resource
-					if index < len(previous.resources) {resource = previous.resources[index]}
-					memo := make(Field_Transforms)
-					for binding_id, binding in check.bindings {check.bindings[binding_id], _ = store_state_path(check.r, binding, resource, nil, value, len(previous.resources) > 0, &memo)}
-				}
+				store_bindings(check, previous, nil, value)
 				check.bindings[id] = replace_state_path(check.r, previous, nil, copy_state_value(check.r, value, depth+1), false)
 			} else {check.bindings[id] = fit_slot(copy_state_value(check.r, value, depth+1), check.bindings[id])}
 		}
@@ -1486,12 +1521,7 @@ assign_state_value :: proc(check: ^State_Flow, expression: ^ast.Expr, value: Sta
 		// Assigning an inline value copies it into this referent. Keep aliases
 		// in reference fields without borrowing the source record's container.
 		value = copy_state_value(check.r, value, depth+1)
-		for index in 0..=len(base.resources) {
-			resource := base.resource
-			if index < len(base.resources) {resource = base.resources[index]}
-			memo := make(Field_Transforms)
-			for id, binding in check.bindings {check.bindings[id], _ = store_state_path(check.r, binding, resource, nil, value, len(base.resources) > 0, &memo)}
-		}
+		store_bindings(check, base, nil, value)
 	case ^ast.Selector_Expr, ^ast.Index_Expr:
 		base_expression: ^ast.Expr
 		name := ""
@@ -1502,18 +1532,18 @@ assign_state_value :: proc(check: ^State_Flow, expression: ^ast.Expr, value: Sta
 		}
 		base := state_access(check, base_expression, scope, depth+1)
 		if base.protected && (base.pointer || base.live || base.shared) {return}
-		fields := make(map[string]State_Access)
+		fields := make(map[string]^State_Access, len(base.fields)+2)
 		for field_name, field in base.fields {fields[field_name] = field}
 		expected := element_access(check.r, base, depth+1) if index != nil else field_access(check.r, base, name, depth+1)
 		stored := copy_state_value(check.r, fit_state_value(value, expected, check, depth+1), depth+1)
 		// An unknown runtime index can refer to any element. Preserve reference
 		// capabilities from other stored elements rather than replacing the bucket.
-		if previous, exists := fields[name]; index != nil && exists {stored, _ = join_state_access(previous, stored)}
-		fields[name] = stored
+		if previous, exists := fields[name]; index != nil && exists {stored, _ = join_state_access(previous^, stored)}
+		fields[name] = new_clone(stored)
 		if index != nil && base.type != nil {
 			if _, table := base.type.derived.(^ast.Map_Type); table {
 				key := copy_state_value(check.r, state_access(check, index, scope, depth+1), depth+1)
-				fields["$key"], _ = join_state_access(fields["$key"], key)
+				join_state_field(&fields, "$key", key)
 			}
 		}
 		base.fields = fields
@@ -1524,7 +1554,7 @@ assign_state_value :: proc(check: ^State_Flow, expression: ^ast.Expr, value: Sta
 			memo, key_memo := make(Field_Transforms), make(Field_Transforms)
 			for id, alias in check.bindings {
 				check.bindings[id], _ = update_state_alias(alias, base.resource, name, stored, index != nil, &memo)
-				if key, exists := fields["$key"]; index != nil && exists {check.bindings[id], _ = update_state_alias(check.bindings[id], base.resource, "$key", key, true, &key_memo)}
+				if key, exists := fields["$key"]; index != nil && exists {check.bindings[id], _ = update_state_alias(check.bindings[id], base.resource, "$key", key^, true, &key_memo)}
 			}
 		}
 	}
@@ -1538,13 +1568,13 @@ update_state_alias :: proc(access: State_Access, resource: State_Location, name:
 	key := field_identity(access.fields)
 	if previous, found := memo^[key]; found {result.fields, changed = previous.fields, previous.changed} else {
 		for field_name, child in access.fields {
-			updated, different := update_state_alias(child, resource, name, value, weak, memo)
+			updated, different := update_state_alias(child^, resource, name, value, weak, memo)
 			if !different {continue}
 			if !changed {
-				result.fields = make(map[string]State_Access)
+				result.fields = make(map[string]^State_Access, len(access.fields)+1)
 				for key, previous in access.fields {result.fields[key] = previous}
 			}
-			result.fields[field_name] = updated
+			result.fields[field_name] = new_clone(updated)
 			changed = true
 		}
 		memo^[key] = Field_Transform{result.fields, changed}
@@ -1553,15 +1583,16 @@ update_state_alias :: proc(access: State_Access, resource: State_Location, name:
 	if access.resource == resource || slice.contains(access.resources[:], resource) {
 		stored := value
 		if previous, exists := result.fields[name]; exists && (weak || len(access.resources) > 0) {
-			joined, different := join_state_access(previous, stored)
+			joined, different := join_state_access(previous^, stored)
 			if !different {return}
 			stored = joined
 		}
+		if previous, exists := result.fields[name]; exists && state_access_equal(previous^, stored) {return}
 		if !changed {
-			result.fields = make(map[string]State_Access)
+			result.fields = make(map[string]^State_Access, len(access.fields)+1)
 			for key, previous in access.fields {result.fields[key] = previous}
 		}
-		result.fields[name] = stored
+		result.fields[name] = new_clone(stored)
 		changed = true
 	}
 	return
@@ -1580,15 +1611,15 @@ fresh_zero_value :: proc(check: ^State_Flow, access: State_Access, depth: int) -
 	if result.type == nil || depth > len(r.symbols)+len(r.scopes) {return result}
 	#partial switch record in result.type.derived {
 	case ^ast.Struct_Type:
-		result.fields = make(map[string]State_Access)
+		result.fields = make(map[string]^State_Access)
 		if record.fields != nil {for field in record.fields.list {for expression in field.names {
 			if name, named := binding_name(expression); named {
 				child := field_access(r, access, name, depth+1)
-				if field.default_value != nil {result.fields[name] = copy_state_value(r, fit_state_value(state_access(check, field.default_value, access.scope, depth+1), child, check, depth+1), depth+1)} else {result.fields[name] = fresh_zero_value(check, child, depth+1)}
+				if field.default_value != nil {result.fields[name] = new_clone(copy_state_value(r, fit_state_value(state_access(check, field.default_value, access.scope, depth+1), child, check, depth+1), depth+1))} else {result.fields[name] = new_clone(fresh_zero_value(check, child, depth+1))}
 			}
 		}}}
 	case ^ast.Array_Type:
-		if record.len != nil {result.fields = make(map[string]State_Access); result.fields[""] = fresh_zero_value(check, element_access(r, access, depth+1), depth+1)}
+		if record.len != nil {result.fields = make(map[string]^State_Access); result.fields[""] = new_clone(fresh_zero_value(check, element_access(r, access, depth+1), depth+1))}
 	}
 	return result
 }
@@ -1601,15 +1632,15 @@ copy_state_value :: proc(r: ^References, access: State_Access, depth: int) -> St
 	if access.pointer || access.shared || known_callback_type(r, access.type, access.scope) || depth > len(r.symbols)+len(r.scopes) {return result}
 	if access.type != nil {
 		if array, fixed := access.type.derived.(^ast.Array_Type); fixed && array.len != nil {
-			result.fields = make(map[string]State_Access)
-			result.fields[""] = copy_state_value(r, element_access(r, access, depth+1), depth+1)
+			result.fields = make(map[string]^State_Access)
+			result.fields[""] = new_clone(copy_state_value(r, element_access(r, access, depth+1), depth+1))
 		}
 		if record, ok := access.type.derived.(^ast.Struct_Type); ok && record.fields != nil {
-			result.fields = make(map[string]State_Access)
+			result.fields = make(map[string]^State_Access)
 			for field in record.fields.list {
 				for expression in field.names {
 					if name, named := binding_name(expression); named {
-						result.fields[name] = copy_state_value(r, field_access(r, access, name, depth+1), depth+1)
+						result.fields[name] = new_clone(copy_state_value(r, field_access(r, access, name, depth+1), depth+1))
 					}
 				}
 			}

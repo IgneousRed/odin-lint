@@ -51,7 +51,7 @@ def main():
             if actual != revision:
                 raise ValueError(f"fetched revision {actual} does not match {revision}")
             built = Path(temporary) / binary.name
-            subprocess.run([odin, "build", "src", "-debug", "-thread-count:2",
+            subprocess.run([odin, "build", "src", "-debug", "-o:speed", "-thread-count:2",
                             f"-define:ODIN_LINT_REVISION={revision}", f"-out:{built}"],
                            cwd=source, check=True, stdout=sys.stderr)
             os.replace(built, binary)

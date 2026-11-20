@@ -146,7 +146,7 @@ join_condition_branches :: proc(left, right: Condition_Branch) -> Condition_Bran
 
 
 copy_state_bindings :: proc(bindings: map[int]State_Access) -> map[int]State_Access {
-	result := make(map[int]State_Access)
+	result := make(map[int]State_Access, len(bindings))
 	for id, access in bindings {result[id] = access}
 	return result
 }
@@ -162,7 +162,7 @@ merge_state_bindings :: proc(destination: ^map[int]State_Access, branch: map[int
 }
 
 copy_transactions :: proc(source: map[State_Location]Active_Transaction) -> map[State_Location]Active_Transaction {
-	result := make(map[State_Location]Active_Transaction)
+	result := make(map[State_Location]Active_Transaction, len(source))
 	for key, active in source {result[key] = active}
 	return result
 }

@@ -144,7 +144,9 @@ result. The executable itself never fetches tools or invokes Odin.
 ## Cache and upgrades
 
 The first run fetches the locked source and compiles it in a private temporary
-directory. Only a successful binary is atomically installed. The cache key
+directory, using speed optimization with debug information and bounds checks
+retained. The extra compilation cost is paid once per cache entry. Only a
+successful binary is atomically installed. The cache key
 includes repository, commit, compiler identity, OS, and CPU architecture. Later
 runs need no network while that cache exists, but still need Odin to identify
 the compiler. Downloaded source is removed after building. Deleting

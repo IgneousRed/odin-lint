@@ -121,6 +121,9 @@ callbacks, returned state provenance and caller-relative field stores. Summaries
 converge through resolved project calls and aliases. Complete-package evidence
 supports named/default arguments, multiple results, reference iteration, casts
 and helpers without requiring external API annotations.
+Positional record initializers follow individual field names, including grouped
+declarations such as `left, right: Leaf`, preserving each field's known callbacks
+and protected references through copies and helper returns.
 
 The analysis retains only enough alias information to distinguish protected FRP
 state from independent working copies and to match transaction/publication

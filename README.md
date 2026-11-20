@@ -19,7 +19,7 @@ From a checkout, with Odin and Make installed:
 
 ```sh
 make build
-# Equivalent: mkdir -p .work && odin build src -debug -thread-count:2 -out:.work/odin-lint
+# Equivalent: mkdir -p .work && odin build src -debug -o:speed -thread-count:2 -out:.work/odin-lint
 .work/odin-lint --help
 .work/odin-lint --version
 make check

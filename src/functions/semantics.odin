@@ -6,6 +6,7 @@ package functions
 // ---------------- Odin ----------------
 
 import "core:fmt"
+import "core:mem"
 import "core:odin/ast"
 import "core:odin/tokenizer"
 import "core:slice"
@@ -23,6 +24,10 @@ Semantics :: struct {
 	r: ^References,
 	facts: []Procedure_Facts,
 	infer, changed: bool,
+	allocator: mem.Allocator,
+	pending: []bool,
+	dependents: []map[int]bool,
+	owner: int,
 	contracts: bool,
 	transactions: [dynamic]Transaction_Fact,
 }
@@ -98,6 +103,8 @@ Access_Kind :: enum {Write, Destroy, Invoke, Transaction, Requires_Transaction}
 // private buffer is different from writing a borrowed relation through a helper.
 analyze_semantics :: proc(model: ^Semantics, diagnostics: ^[dynamic]state.Diagnostic, infer: bool) {
 	model.infer = infer
+	model.allocator = context.allocator
+	model.owner = -1
 	check := State_Flow{r = model.r, diagnostics = diagnostics, bindings = make(map[int]State_Access), quiet = infer, caller = -1,
 		transactions = make(map[State_Location]Active_Transaction)}
 	visitor := ast.Visitor{visit = visit_state_flow, data = &check}
@@ -148,7 +155,7 @@ apply_callback :: proc(check: ^State_Flow, callback: State_Access, arguments: []
 		} else {check.callback_arguments[target] = slice.clone(arguments)}
 		defer {if !recursive {delete_key(&check.callback_arguments, target)}}
 		if check.r.procedures[target].literal.body == nil {record_effect(check, .Unknown, pos)}
-		facts := model.facts[target]
+		facts := callee_facts(check, target)
 		for effect in facts.effects {record_effect(check, effect, pos)}
 		for requirement in facts.accesses {
 			index, parameter := slice.linear_search(facts.parameters[:], requirement.origin.parameter)
@@ -319,7 +326,7 @@ contains_protected_state :: proc(access: State_Access, seen: ^map[uintptr]bool =
 	if seen^[key] {return}
 	seen^[key] = true
 	for _, child in access.fields {
-		protected = protected || contains_protected_state(child, seen)
+		protected = protected || contains_protected_state(child^, seen)
 	}
 	return
 }
@@ -333,7 +340,7 @@ instantiate_access :: proc(check: ^State_Flow, access: State_Access, parameters:
 instantiate_values :: proc(check: ^State_Flow, access: State_Access, parameters: []int, arguments: []State_Access, allocation: ^ast.Expr = nil, memo: ^Field_Transforms = nil) -> State_Access {
 	result := access
 	result.origins = nil
-	mapped_fields: map[string]State_Access
+	mapped_fields: map[string]^State_Access
 	if len(access.origins) > 0 {
 		// A symbolic callback is a value supplied by the actual caller. Carry
 		// every target/effect alternative, including nil and unknown, when its
@@ -367,9 +374,9 @@ instantiate_values :: proc(check: ^State_Flow, access: State_Access, parameters:
 			for resource in value.resources {if resource != result.resource && !slice.contains(result.resources[:], resource) {append(&result.resources, resource)}}
 			for mapped in value.origins {if !slice.contains(result.origins[:], mapped) {append(&result.origins, mapped)}}
 			if len(value.fields) > 0 {
-				if mapped_fields == nil {mapped_fields = make(map[string]State_Access)}
+				if mapped_fields == nil {mapped_fields = make(map[string]^State_Access, len(value.fields)+len(access.fields))}
 				for name, child in value.fields {
-					if previous, present := mapped_fields[name]; present {mapped_fields[name], _ = join_state_access(previous, child)} else {mapped_fields[name] = child}
+					if _, present := mapped_fields[name]; present {join_state_field(&mapped_fields, name, child^)} else {mapped_fields[name] = child}
 				}
 			}
 		}
@@ -392,8 +399,8 @@ instantiate_values :: proc(check: ^State_Flow, access: State_Access, parameters:
 		if memo == nil {storage = make(Field_Transforms); memo = &storage}
 		key := field_identity(access.fields)
 		if previous, found := memo^[key]; found {result.fields = previous.fields} else {
-			result.fields = make(map[string]State_Access)
-			for name, child in access.fields {result.fields[name] = instantiate_values(check, child, parameters, arguments, allocation, memo)}
+			result.fields = make(map[string]^State_Access, len(access.fields))
+			for name, child in access.fields {result.fields[name] = new_clone(instantiate_values(check, child^, parameters, arguments, allocation, memo))}
 			memo^[key] = Field_Transform{fields = result.fields}
 		}
 	}
@@ -486,7 +493,7 @@ project_access :: proc(r: ^References, access: State_Access, path: string) -> St
 	for component in strings.split(path, ".") {
 		if component == "" {continue}
 		if component == "^" {
-			if referent, known := result.fields["^"]; known {result = referent} else {result = access_path(result, "^"); result.live, result.pointer = result.pointer, false}
+			if referent, known := result.fields["^"]; known {result = referent^} else {result = access_path(result, "^"); result.live, result.pointer = result.pointer, false}
 		} else if component == "[]" {
 			base := result
 			result = element_access(r, base, 0)
@@ -541,6 +548,15 @@ external_target :: proc(r: ^References, expression: ^ast.Expr, scope: int) -> (p
 append_access_field :: proc(path, field: string, repeat := false) -> string {
 	if !repeat && slice.contains(strings.split(path, "."), field) {return ""}
 	return field if path == "" else strings.concatenate({path, ".", field})
+}
+
+
+// Record actual summary reads, including callbacks and global initializers.
+// Nested bodies invalidate their enclosing traversal, which supplies captures.
+callee_facts :: proc(check: ^State_Flow, target: int) -> Procedure_Facts {
+	model := check.r.semantics
+	if model.infer && model.owner >= 0 {model.dependents[target][model.owner] = true}
+	return model.facts[target]
 }
 
 

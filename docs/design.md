@@ -74,37 +74,58 @@ without filesystem access. `src/state` defines source inputs and diagnostics.
 A stateless invocation needs no extra engine layer.
 
 Paths, saved sources, ASTs, scopes, symbols, alias relationships and uses belong
-to the caller's invocation arena. Semantic inference uses a separate working arena
-per pass and two compact summary generations. Retained summaries copy their owned
-strings, arrays and shared child maps before the working arena is released;
-AST references and symbol indexes continue to refer to the invocation graph.
-Final diagnostics are copied into the caller's allocator before releasing the
-final working arena. Discarded convergence work does not accumulate until CLI
-exit. Working and summary arenas batch state-provenance maps into blocks rather
-than allocating and freeing each map through the heap. No daemon or persistent
-analysis cache is introduced.
-Symbols and procedures have stable array indexes within that analysis.
-File scopes inherit a shared package scope; local scopes track declaration order
-and shadowing. Namespace promotions forward to actual declaration identities.
-State-access copies retain immutable field provenance. Shared child snapshots form
-a DAG, not independently owned trees. Alias updates, caller-relative stores and instantiation cache transformed child maps for
-one operation with fixed arguments. The key is the pinned runtime map allocation
-identity; caches never cross analyses or argument environments. Root capabilities
-remain separate because values can share children while having different roots.
-Queries visit shared children once while preserving declared-type checks on each
-relevant shape. This preserves sharing without a depth/iteration cutoff or loss
-of protected-state evidence. Recursive summary widening remains conservative. Joins reuse
-unchanged child snapshots and copy collections only when a new fact is added.
-Silent nested-loop walks reuse their stable result; the diagnostic walk still visits every body.
-Procedures analyze independent binding snapshots and loops converge to a monotone
-provenance state. Stable procedure aliases share one lexical resolver across call
-effects and inlining. Immutable source availability facts contain disjunctions of
-OS/architecture sets and conjunctions of lexical Boolean atoms. Guarded lookup
-subtracts each scope's proven coverage before considering outer bindings; overlap
-or uncovered configurations prevent certainty. Exhaustive alternatives contribute
-all possible callees, preserving the union of effects. Universal guards are inline
+to the caller's invocation arena. Semantic inference uses working arenas per
+procedure body and per call's store replay, plus two compact summary generations
+between passes. Completed bodies retain only their summaries; store replay
+retains only final bindings and the caller summary. Retained values copy owned
+strings, arrays and child records before their scratch arena is released,
+preserving shared child maps. Store replay copies only changed bindings and
+reuses immutable children already owned by the surrounding body. Nested
+procedures retain summaries in the pass arena rather than their enclosing body's
+scratch. AST references and symbol indexes continue to refer to the invocation
+graph. Final diagnostics belong to the caller's allocator. Working bindings
+retain their Boolean predicate identities when compacted; saved summaries
+discard transient predicate pointers. Discarded convergence work does not
+accumulate until CLI exit. Arenas batch small allocations into blocks. No daemon
+or persistent analysis cache is introduced.
+
+Symbols and procedures have stable array indexes within that analysis. File
+scopes inherit a shared package scope; local scopes track declaration order and
+shadowing. Namespace promotions forward to actual declaration identities.
+
+Field maps contain pointers to immutable child records, so copying a map copies
+its index rather than every capability record. Shared child snapshots form a DAG,
+not independently owned trees. Alias updates, caller-relative stores
+and instantiation cache transformed child maps for one operation with fixed
+arguments. The key is the pinned runtime map allocation identity; caches never
+cross analyses or argument environments. Root capabilities remain separate
+because values can share children while having different roots. Store replay
+also caches which allocation roots a child graph contains, so it can skip graphs
+unaffected by a store without reordering writes. Queries visit shared children
+once while preserving declared-type checks on each relevant shape. This
+preserves sharing without a depth/iteration cutoff or loss of protected-state
+evidence. Recursive summary widening remains conservative; its ancestor types
+are a stack-linked path rather than an allocated set. Joins reuse unchanged
+child snapshots and copy collections only when a new fact is added. Silent
+nested-loop walks reuse their stable result.
+
+Procedures analyze independent binding snapshots and loops converge to a
+monotone provenance state. Inference records actual summary dependencies,
+including returned callbacks and global initializers. A changed summary
+reschedules its readers and itself; nested
+bodies reschedule their enclosing traversal to preserve captures. Every
+procedure runs again when transaction/lifecycle contracts become available, and
+the final diagnostic traversal always visits every body.
+
+Stable procedure aliases share one lexical resolver across call effects and
+inlining. Immutable source availability facts contain disjunctions of
+OS/architecture sets and conjunctions of lexical Boolean atoms. Guarded lookup subtracts each scope's
+proven coverage before considering outer bindings; overlap or uncovered
+configurations prevent certainty. Exhaustive alternatives contribute all
+possible callees, preserving the union of effects. Universal guards are inline
 values and allocated guard facts live with the analysis, never a temporary call
 summary arena.
+
 Only relevant unresolved lookups suppress possible inline targets. Effects and
 capability summaries are per-procedure facts; structural transaction/publication
 models are policy evidence, with the limits documented in `rules.md`. Publication

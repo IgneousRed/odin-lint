@@ -62,3 +62,21 @@ class OwnershipCopyingTests(unittest.TestCase):
                 self.check(main.parent, entry=True, run=not invalid)
                 findings = self.lint(main, helper)
                 self.assertEqual("OWN001:" in findings, invalid, findings)
+
+    def test_grouped_record_fields_preserve_borrowed_slice_children(self):
+        self.owner()
+        helper = self.write("effects/transfer", "Leaf :: struct {values: []int}\n"
+                            "Pair :: struct {left, right: Leaf}\n"
+                            "copy :: proc(value: Pair) -> Pair {return value}\n")
+        for borrowed in (False, True):
+            with self.subTest(borrowed=borrowed):
+                value = "engine.snapshot().facts.borrowed" if borrowed else "make([]int, 1)"
+                main = self.main("values := " + value + "\n"
+                                 + ("" if borrowed else "defer delete(values)\n")
+                                 + "leaf := transfer.Leaf{values}\n"
+                                 "pair := transfer.copy(transfer.Pair{leaf, leaf})\n"
+                                 "pair.right.values[0] = 7\n",
+                                 'import "../src/effects/transfer"\n')
+                self.check(main.parent, entry=True, run=True)
+                findings = self.lint(main, helper)
+                self.assertEqual("OWN001:" in findings, borrowed, findings)

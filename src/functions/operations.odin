@@ -192,20 +192,20 @@ decoded_access :: proc(r: ^References, original: State_Access, site: ^ast.Expr, 
 	defer delete_key(seen, result.type)
 	#partial switch shape in result.type.derived {
 	case ^ast.Struct_Type:
-		result.fields = make(map[string]State_Access)
+		result.fields = make(map[string]^State_Access)
 		if shape.fields != nil {for field in shape.fields.list {
 			for expression in field.names {if name, named := binding_name(expression); named {
 				child := field_access(r, result, name, 0)
-				result.fields[name] = decoded_access(r, child, site, append_access_field(path, name), false, seen)
+				result.fields[name] = new_clone(decoded_access(r, child, site, append_access_field(path, name), false, seen))
 			}}
 		}}
 	case ^ast.Map_Type, ^ast.Array_Type, ^ast.Dynamic_Array_Type:
-		result.fields = make(map[string]State_Access)
+		result.fields = make(map[string]^State_Access)
 		repeat := false
 		if array, fixed := result.type.derived.(^ast.Array_Type); fixed {repeat = array.len != nil}
-		result.fields[""] = decoded_access(r, element_access(r, result, 0), site, append_access_field(path, "[]", repeat), false, seen)
+		result.fields[""] = new_clone(decoded_access(r, element_access(r, result, 0), site, append_access_field(path, "[]", repeat), false, seen))
 		if table, mapped := result.type.derived.(^ast.Map_Type); mapped {
-			result.fields["$key"] = decoded_access(r, access_type(r, table.key, result.scope, 0), site, append_access_field(path, "$key"), false, seen)
+			result.fields["$key"] = new_clone(decoded_access(r, access_type(r, table.key, result.scope, 0), site, append_access_field(path, "$key"), false, seen))
 		}
 	}
 	return

@@ -5,6 +5,8 @@ package functions
 
 // ---------------- Odin ----------------
 
+import "base:runtime"
+import "core:mem"
 import "core:odin/ast"
 import "core:odin/tokenizer"
 import "core:slice"
@@ -17,11 +19,32 @@ import "core:strings"
 // Field writes are relative to the actual caller. Preserve protected-state
 // aliases while allowing independent private working copies.
 apply_stores :: proc(check: ^State_Flow, facts: Procedure_Facts, arguments: []State_Access, pos: tokenizer.Pos, allocation: ^ast.Expr = nil, alternatives := false) {
+	if len(facts.stores) == 0 {return}
+	// A call can replay many field stores. Keep only the final bindings and
+	// summary, rather than retaining every intermediate alias snapshot.
+	allocator := context.allocator
+	transient: mem.Dynamic_Arena
+	heap := runtime.heap_allocator()
+	mem.dynamic_arena_init(&transient, block_allocator = heap, array_allocator = heap, block_size = INFERENCE_BLOCK_SIZE, out_band_size = INFERENCE_BLOCK_SIZE/8)
+	context.allocator = mem.dynamic_arena_allocator(&transient)
+	changed_bindings := make(map[int]bool)
+	retained := make(Field_Transforms)
+	for _, binding in check.bindings {remember_state_fields(binding.fields, &retained)}
+	summary_changed := false
+	defer {
+		context.allocator = allocator
+		for id in changed_bindings {check.bindings[id] = clone_state_graph(check.bindings[id], &retained, true)}
+		if model := check.r.semantics; summary_changed {
+			model.facts[check.caller] = clone_semantic_facts(model.facts[check.caller:check.caller+1])[0]
+		}
+		mem.dynamic_arena_destroy(&transient)
+	}
 	stores := slice.clone(facts.stores[:])
 	slice.sort_by(stores, store_before)
 	// Arguments are immutable snapshots for this call; all transfers share the
 	// same substitution even when a value occurs in several destination stores.
 	instantiated := make(Field_Transforms)
+	roots := make(Field_Roots)
 	for stored in stores {
 		index, found := slice.linear_search(facts.parameters[:], stored.destination.parameter)
 		if !found || index >= len(arguments) {continue}
@@ -37,18 +60,29 @@ apply_stores :: proc(check: ^State_Flow, facts: Procedure_Facts, arguments: []St
 		append(&sequence, pos)
 		recursive := slice.contains(stored.order[:], pos)
 		if !recursive {append(&sequence, ..stored.order[:])}
-		record_store(check, destination, value, stored.initializes, stored.conditional || len(base.resources) > 0 || alternatives || recursive, stored.site, pos, sequence[:])
-		for resource_index in 0..=len(base.resources) {
-			resource := base.resource
-			if resource_index < len(base.resources) {resource = base.resources[resource_index]}
-			memo := make(Field_Transforms)
-			path := strings.split(stored.destination.path, ".")
-			for id, binding in check.bindings {check.bindings[id], _ = store_state_path(check.r, binding, resource, path, value, stored.conditional || len(base.resources) > 0 || alternatives, &memo)}
+		stored_summary := record_store(check, destination, value, stored.initializes, stored.conditional || len(base.resources) > 0 || alternatives || recursive, stored.site, pos, sequence[:])
+		summary_changed = summary_changed || stored_summary
+		store_bindings(check, base, strings.split(stored.destination.path, "."), value, stored.conditional || alternatives, &roots, &changed_bindings)
+	}
+}
+
+// Each possible destination shares one transform across all binding aliases.
+// Store replay also tracks changed bindings for retention outside its scratch.
+store_bindings :: proc(check: ^State_Flow, destination: State_Access, path: []string, value: State_Access, weak := false, roots: ^Field_Roots = nil, changed_bindings: ^map[int]bool = nil) {
+	for index in 0..=len(destination.resources) {
+		resource := destination.resource
+		if index < len(destination.resources) {resource = destination.resources[index]}
+		memo := make(Field_Transforms)
+		for id, binding in check.bindings {
+			updated, changed := store_state_path(check.r, binding, resource, path, value, weak || len(destination.resources) > 0, &memo, roots)
+			if !changed {continue}
+			check.bindings[id] = updated
+			if changed_bindings != nil {changed_bindings^[id] = true}
 		}
 	}
 }
 
-record_store :: proc(check: ^State_Flow, destination, value: State_Access, initializes := false, conditional := false, site := tokenizer.Pos{}, invocation := tokenizer.Pos{}, order: []tokenizer.Pos = nil) {
+record_store :: proc(check: ^State_Flow, destination, value: State_Access, initializes := false, conditional := false, site := tokenizer.Pos{}, invocation := tokenizer.Pos{}, order: []tokenizer.Pos = nil) -> (changed: bool) {
 	model := check.r.semantics
 	if model == nil || !model.infer || check.caller < 0 {return}
 	facts := &model.facts[check.caller]
@@ -61,26 +95,28 @@ record_store :: proc(check: ^State_Flow, destination, value: State_Access, initi
 		found := false
 		for &stored in facts.stores {
 			if stored.destination != origin || stored.site != site || stored.invocation != invocation {continue}
-			if stored.initializes && !initializes {stored.initializes = false; model.changed = true}
+			if stored.initializes && !initializes {stored.initializes = false; changed = true}
 			different_order := len(stored.order) != len(order)
 			if !different_order {for position, i in order {if position != stored.order[i] {different_order = true; break}}}
-			if (optional || different_order) && !stored.conditional {stored.conditional = true; model.changed = true}
-			if different_order && store_before(Stored_Value{order = order}, stored) {stored.order = order; model.changed = true}
-			joined, changed := join_state_access(stored.value, value)
-			if changed {stored.value = joined; model.changed = true}
+			if (optional || different_order) && !stored.conditional {stored.conditional = true; changed = true}
+			if different_order && store_before(Stored_Value{order = order}, stored) {stored.order = order; changed = true}
+			joined, different := join_state_access(stored.value, value)
+			if different {stored.value = joined; changed = true}
 			found = true
 		}
-		if !found {append(&facts.stores, Stored_Value{destination = origin, value = value, initializes = initializes, conditional = optional, site = site, invocation = invocation, order = order}); model.changed = true}
+		if !found {append(&facts.stores, Stored_Value{destination = origin, value = value, initializes = initializes, conditional = optional, site = site, invocation = invocation, order = order}); changed = true}
 	}
+	model.changed = model.changed || changed
+	return
 }
 
 refresh_address :: proc(check: ^State_Flow, address: State_Access) -> State_Access {
 	if !address.addressed {return address}
 	if value, loaded := load_addresses(check, address); loaded {
 		result := address
-		result.fields = make(map[string]State_Access)
+		result.fields = make(map[string]^State_Access, len(address.fields)+1)
 		for name, child in address.fields {if name != "^" {result.fields[name] = child}}
-		result.fields["^"] = value
+		result.fields["^"] = new_clone(value)
 		return result
 	}
 	return address
@@ -115,47 +151,6 @@ load_addresses :: proc(check: ^State_Flow, address: State_Access) -> (value: Sta
 	return
 }
 
-store_state_path :: proc(r: ^References, binding: State_Access, resource: State_Location, path: []string, value: State_Access, weak: bool, memo: ^Field_Transforms = nil) -> (result: State_Access, changed: bool) {
-	result = binding
-	if resource.root == nil {return}
-	if binding.slot.root == resource.root {
-		if binding.slot.path == resource.path {return replace_state_path(r, binding, path, value, weak, true, true), true}
-		prefix := binding.slot.path
-		if prefix != "" {prefix = strings.concatenate({prefix, "."})}
-		if strings.has_prefix(resource.path, prefix) {
-			combined := make([dynamic]string)
-			append(&combined, ..strings.split(resource.path[len(prefix):], "."))
-			append(&combined, ..path)
-			return replace_state_path(r, binding, combined[:], value, weak), true
-		}
-	}
-	if !binding.addressed && binding.resource.root == resource.root {
-		if binding.resource.path == resource.path {return replace_state_path(r, binding, path, value, weak), true}
-		prefix := binding.resource.path
-		if prefix != "" {prefix = strings.concatenate({prefix, "."})}
-		if strings.has_prefix(resource.path, prefix) {
-			combined := make([dynamic]string)
-			append(&combined, ..strings.split(resource.path[len(prefix):], "."))
-			append(&combined, ..path)
-			return replace_state_path(r, binding, combined[:], value, weak), true
-		}
-	}
-	if len(binding.fields) == 0 {return}
-	memo := memo
-	storage: Field_Transforms
-	if memo == nil {storage = make(Field_Transforms); memo = &storage}
-	key := field_identity(binding.fields)
-	if previous, found := memo^[key]; found {result.fields = previous.fields; return result, previous.changed}
-	for name, child in binding.fields {
-		updated, different := store_state_path(r, child, resource, path, value, weak, memo)
-		if !different {continue}
-		if !changed {result.fields = make(map[string]State_Access); for key, previous in binding.fields {result.fields[key] = previous}}
-		result.fields[name], changed = updated, true
-	}
-	memo^[key] = Field_Transform{result.fields, changed}
-	return
-}
-
 replace_state_path :: proc(r: ^References, base: State_Access, path: []string, value: State_Access, weak: bool, root := true, variable := false) -> State_Access {
 	if len(path) == 0 || len(path) == 1 && path[0] == "" {
 		result := fit_state_value(value, base)
@@ -175,13 +170,14 @@ replace_state_path :: proc(r: ^References, base: State_Access, path: []string, v
 	}
 	name := path[0]
 	if name == "[]" {name = ""}
-	result := base
-	result.fields = make(map[string]State_Access)
-	for key, child in base.fields {result.fields[key] = child}
 	child := element_access(r, base, 0) if name == "" else field_access(r, base, name, 0)
 	stored := replace_state_path(r, child, path[1:], value, weak, false)
 	if name == "" {stored, _ = join_state_access(child, stored)}
-	result.fields[name] = stored
+	if previous, exists := base.fields[name]; exists && state_access_equal(previous^, stored) {return base}
+	result := base
+	result.fields = make(map[string]^State_Access, len(base.fields)+1)
+	for key, previous in base.fields {result.fields[key] = previous}
+	result.fields[name] = new_clone(stored)
 	return result
 }
 
@@ -224,9 +220,43 @@ field_slot :: proc(value, base: State_Access, name: string, element := false) ->
 // ---------------- File ----------------
 
 @(private = "file")
+store_state_path :: proc(r: ^References, binding: State_Access, resource: State_Location, path: []string, value: State_Access, weak: bool, memo: ^Field_Transforms, roots: ^Field_Roots) -> (result: State_Access, changed: bool) {
+	result = binding
+	if resource.root == nil {return}
+	if roots != nil && !has_store_root(&result, resource.root, roots) {return}
+	for location, index in ([2]State_Location{binding.slot, binding.resource}) {
+		if location.root != resource.root || index == 1 && binding.addressed {continue}
+		if location.path == resource.path {
+			result = replace_state_path(r, binding, path, value, weak, variable = index == 0)
+			return result, !state_access_equal(binding, result)
+		}
+		prefix := location.path
+		if prefix != "" {prefix = strings.concatenate({prefix, "."})}
+		if strings.has_prefix(resource.path, prefix) {
+			combined := make([dynamic]string)
+			append(&combined, ..strings.split(resource.path[len(prefix):], "."))
+			append(&combined, ..path)
+			result = replace_state_path(r, binding, combined[:], value, weak)
+			return result, !state_access_equal(binding, result)
+		}
+	}
+	if len(binding.fields) == 0 {return}
+	key := field_identity(binding.fields)
+	if previous, found := memo^[key]; found {result.fields = previous.fields; return result, previous.changed}
+	for name, child in binding.fields {
+		updated, different := store_state_path(r, child^, resource, path, value, weak, memo, roots)
+		if !different {continue}
+		if !changed {result.fields = make(map[string]^State_Access, len(binding.fields)); for key, previous in binding.fields {result.fields[key] = previous}}
+		result.fields[name], changed = new_clone(updated), true
+	}
+	memo^[key] = Field_Transform{result.fields, changed}
+	return
+}
+
+@(private = "file")
 reference_value :: proc(value: State_Access) -> bool {
 	if value.decoded || value.pointer || value.shared || value.nil_value || len(value.callables) > 0 || value.callback_effects != {} || value.callback_modeled || value.callback_unknown {return true}
-	for _, child in value.fields {if reference_value(child) {return true}}
+	for _, child in value.fields {if reference_value(child^) {return true}}
 	return false
 }
 
@@ -241,4 +271,19 @@ store_before :: proc(left, right: Stored_Value) -> bool {
 		if position.offset != other.offset {return position.offset < other.offset}
 	}
 	return len(left.order) < len(right.order)
+}
+
+// Child snapshots are immutable throughout a call. A negative result skips
+// only graphs with no possible matching slot or backing-storage allocation.
+@(private = "file")
+has_store_root :: proc(value: ^State_Access, root: ^ast.Expr, cache: ^Field_Roots) -> bool {
+	if value.slot.root == root || value.resource.root == root {return true}
+	if len(value.fields) == 0 {return false}
+	key := struct {fields: uintptr, root: ^ast.Expr}{field_identity(value.fields), root}
+	if found, known := cache^[key]; known {return found}
+	for _, child in value.fields {
+		if has_store_root(child, root, cache) {cache^[key] = true; return true}
+	}
+	cache^[key] = false
+	return false
 }

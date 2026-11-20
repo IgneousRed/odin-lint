@@ -10,7 +10,7 @@ REVISION ?= $(shell git rev-parse --verify HEAD 2>/dev/null)
 
 build:
 	mkdir -p .work
-	$(ODIN) build src -debug $(ODIN_FLAGS) -define:ODIN_LINT_REVISION=$(or $(REVISION),unknown) -out:.work/odin-lint
+	$(ODIN) build src -debug -o:speed $(ODIN_FLAGS) -define:ODIN_LINT_REVISION=$(or $(REVISION),unknown) -out:.work/odin-lint
 
 check:
 	$(ODIN) check src $(ODIN_FLAGS) $(PROJECT_CHECK_FLAGS)

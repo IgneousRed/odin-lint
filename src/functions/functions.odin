@@ -27,11 +27,9 @@ import "../state"
 @(private)
 PURE_ROLES :: bit_set[Role]{.Catalog, .Functions, .State, .Views, .Migrations}
 
-// ---------------- File ----------------
-
 // State_Flow maps commonly exceed the default arena out-of-band threshold.
 // Batch those allocations so releasing a pass does not free each map separately.
-@(private = "file")
+@(private)
 INFERENCE_BLOCK_SIZE :: 1024*1024
 
 // -------------------------------- Types --------------------------------
@@ -83,6 +81,7 @@ source_imports :: proc(text, path: string) -> ([]string, string) {
 // One arena owns the entire project graph and its ASTs.
 check_package :: proc(sources: []state.Source, root: string, collections: map[string]string, source_root := "", complete_project := false, import_aliases: map[string]string = nil) -> (diagnostics: [dynamic]state.Diagnostic, failure: string) {
 	_ = complete_project
+	diagnostics = make([dynamic]state.Diagnostic)
 	source_root := source_root
 	if source_root == "" {
 		source_root, _ = filepath.join({root, "src"})
@@ -688,6 +687,9 @@ check_package :: proc(sources: []state.Source, root: string, collections: map[st
 		}
 		model := Semantics{r = &r, facts = make([]Procedure_Facts, len(r.procedures))}
 		r.semantics = &model
+		model.pending = make([]bool, len(r.procedures))
+		model.dependents = make([]map[int]bool, len(r.procedures))
+		for &dependents in model.dependents {dependents = make(map[int]bool)}
 		for procedure, id in r.procedures {
 			scope := r.node_scopes[&procedure.literal.type.node]
 			for fields, is_result in ([2]^ast.Field_List{procedure.literal.type.params, procedure.literal.type.results}) {
@@ -731,13 +733,14 @@ check_package :: proc(sources: []state.Source, root: string, collections: map[st
 		generation := 0
 		for phase in 0..<2 {
 			model.contracts = phase == 1
+			for &pending in model.pending {pending = true}
 			for {
 				model.changed = false
 				transient: mem.Dynamic_Arena
 				mem.dynamic_arena_init(&transient, block_allocator = heap, array_allocator = heap, block_size = INFERENCE_BLOCK_SIZE, out_band_size = INFERENCE_BLOCK_SIZE/8)
 				{
 					context.allocator = mem.dynamic_arena_allocator(&transient)
-					model.facts = clone_semantic_facts(model.facts)
+					model.facts = slice.clone(model.facts)
 					analyze_semantics(&model, &diagnostics, true)
 				}
 				context.allocator = caller_allocator
