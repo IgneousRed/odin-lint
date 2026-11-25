@@ -1,0 +1,4 @@
+{
+  "src/functions/functions.odin": "package functions\nFLAG :: #config(FUZZ_BRANCH, true)\nwhen FLAG {\n\tvalue :: proc() -> int {return 1}\n} else {\n\tvalue :: proc() -> int {return 2}\n}\n@(private)\nhelper :: proc() -> int {\n\tif true {return value()}\n\telse {return 0}\n}\nread :: proc() -> int {return helper()}\n",
+  "consumer/consumer.odin": "package consumer\nimport \"../src/functions\"\nread :: proc() -> int {return functions.read()}\n"
+}

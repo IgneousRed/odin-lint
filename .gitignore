@@ -1,0 +1,6 @@
+.work/
+.private/
+.local/
+.vendor/
+.DS_Store
+AGENTS.md

@@ -1,0 +1,5 @@
+{
+  "src/state/state.odin": "package state\nStore :: struct {value: int, link: ^int}\n",
+  "src/functions/functions.odin": "package functions\nimport \"../state\"\nwrite :: proc(p: ^state.Store) {p.value = 1}\nforward :: proc(p: ^state.Store) {alias := write; alias(p)}\ninvoke :: proc(p: ^state.Store, callback: proc(^state.Store)) {callback(p)}\npatch :: proc(first, second: ^state.Store) {first^ = second^; second.value = 3}\n",
+  "consumer/consumer.odin": "package consumer\nimport \"../src/state\"\nimport \"../src/functions\"\nlive: state.Store\nrun :: proc() {\n\twork: state.Store\n\tfunctions.forward(&live)\n\tfunctions.invoke(callback = functions.write, p = &live)\n\tfunctions.patch(second = &work, first = &live)\n}\n"
+}

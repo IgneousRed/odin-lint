@@ -1,0 +1,5 @@
+{
+  "src/state/state.odin": "package state\nStore :: struct {depth, value: int}\n",
+  "src/engine/engine.odin": "package engine\nimport \"../state\"\nbegin :: proc(s: ^state.Store) -> bool {s.depth += 1; return true}\nfinish :: proc(s: ^state.Store) {s.depth -= 1}\nset :: proc(s: ^state.Store) {s.value = 2}\npublish :: proc(dst, src: ^state.Store, approved: bool) {assert(approved); dst^ = src^; src^ = {}}\n",
+  "consumer/consumer.odin": "package consumer\nimport \"../src/state\"\nimport \"../src/engine\"\nlive: state.Store\nrun :: proc() {\n\twork: state.Store\n\tif engine.begin(&live) {defer engine.finish(&live); engine.set(&live)}\n\tengine.publish(&live, &work, false)\n}\n"
+}

@@ -1,0 +1,4 @@
+{
+  "src/functions/functions.odin": "package functions\nimport \"fixture:catalog\"\nread :: proc() -> int {return catalog.VALUE}\n",
+  "vendor/fixture/catalog/catalog.odin": "package catalog\nVALUE :: 1\n"
+}

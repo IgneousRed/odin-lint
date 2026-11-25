@@ -1,0 +1,63 @@
+{
+  "applications": [
+    {
+      "path": "src",
+      "name": "cli",
+      "files": [
+        "inputs/aliases/src/functions/functions.odin"
+      ]
+    },
+    {
+      "path": "src",
+      "name": "aliases",
+      "args": [
+        "--root",
+        "inputs/aliases"
+      ],
+      "files": [
+        "inputs/aliases/src/state/state.odin",
+        "inputs/aliases/src/functions/functions.odin",
+        "inputs/aliases/consumer/consumer.odin"
+      ]
+    },
+    {
+      "path": "src",
+      "name": "scopes",
+      "args": [
+        "--root",
+        "inputs/scopes"
+      ],
+      "files": [
+        "inputs/scopes/src/state/state.odin",
+        "inputs/scopes/src/engine/engine.odin",
+        "inputs/scopes/consumer/consumer.odin"
+      ]
+    },
+    {
+      "path": "src",
+      "name": "conditions",
+      "args": [
+        "--root",
+        "inputs/conditions"
+      ],
+      "files": [
+        "inputs/conditions/src/functions/functions.odin",
+        "inputs/conditions/consumer/consumer.odin"
+      ]
+    },
+    {
+      "path": "src",
+      "name": "collections",
+      "args": [
+        "--root",
+        "inputs/collections",
+        "--collection",
+        "fixture=inputs/collections/vendor/fixture"
+      ],
+      "files": [
+        "inputs/collections/src/functions/functions.odin",
+        "inputs/collections/vendor/fixture/catalog/catalog.odin"
+      ]
+    }
+  ]
+}

@@ -1,0 +1,12 @@
+#!/bin/sh
+set -eu
+case "$2" in
+    https://github.com/IgneousRed/odin-lint.git|git@github.com:IgneousRed/odin-lint.git) ;;
+    *) printf '%s\n' 'Push refused: review the destination before changing the publication guard.' >&2; exit 2 ;;
+esac
+root=$(git rev-parse --show-toplevel)
+while read -r local_ref local_sha remote_ref remote_sha; do
+    "$root/scripts/dev" python3 "$root/scripts/publication-guard.py" \
+        --repository "$root" --base "$remote_sha" --head "$local_sha" \
+        --local-ref "$local_ref" --remote-ref "$remote_ref"
+done
