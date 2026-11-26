@@ -46,12 +46,14 @@ class FuzzGateTests(unittest.TestCase):
     def test_make_activates_fuzz_profile_after_lint(self):
         result = subprocess.run(
             [shutil.which("make"), "--no-print-directory", "-n", "fuzz",
-             "ODIN=inert-odin", "PYTHON=inert-python", "REVISION=" + "a" * 40],
+             "ODIN=inert-odin", "PYTHON=inert-python", "REVISION=" + "a" * 40,
+             "FUZZ_THREADS=1"],
             cwd=PROJECT, env=os.environ | {"PROJECT_NIX_ENVIRONMENT": str(PROJECT)},
             text=True, capture_output=True, check=True)
         flags = os.environ.get("ODIN_FLAGS", "-thread-count:2")
         activation = f'./scripts/dev --profile fuzz env ODIN_FLAGS="{flags}" inert-python scripts/fuzz.py'
         self.assertIn(activation, result.stdout)
+        self.assertIn("--thread-count 1", result.stdout)
         self.assertLess(result.stdout.index(".work/build/odin-lint --root . src tests"),
                         result.stdout.index(activation))
 
@@ -95,6 +97,18 @@ class FuzzGateTests(unittest.TestCase):
                 self.assertEqual(caught.exception.code, 2)
                 namespace["prepare"].assert_not_called()
 
+    def test_invalid_thread_counts_fail_before_dependency_setup(self):
+        main = DRIVER["main"]
+        for value in ("0", "-1", "nan", "1.5"):
+            with self.subTest(value=value), \
+                 mock.patch.object(sys, "argv", ["fuzz.py", "--thread-count", value]), \
+                 mock.patch.dict(main.__globals__, locked_setup=mock.Mock()) as namespace, \
+                 mock.patch("sys.stderr"):
+                with self.assertRaises(SystemExit) as caught:
+                    main()
+                self.assertEqual(caught.exception.code, 2)
+                namespace["locked_setup"].assert_not_called()
+
     def test_verification_records_snapshot_and_process_outcome(self):
         main = DRIVER["main"]
         with tempfile.TemporaryDirectory(dir=PROJECT / ".work") as temporary:
@@ -114,6 +128,7 @@ class FuzzGateTests(unittest.TestCase):
                 if "explore" in command:
                     self.assertEqual(kwargs["env"]["ODIN_FUZZ"], command[0])
                     self.assertEqual(command[command.index("--corpus-dir") + 1], str(root / ".local/fuzz/corpus"))
+                    self.assertEqual(command[command.index("--thread-count") + 1], "1")
                     summary_path.parent.mkdir(parents=True, exist_ok=True)
                     summary_path.write_text(json.dumps({"status": "ok", "finding_count": 0, "applications": [app]}), encoding="utf-8")
                     return subprocess.CompletedProcess(command, process_exit)
@@ -126,7 +141,7 @@ class FuzzGateTests(unittest.TestCase):
                     app = application("cli")
                     if finding:
                         app["finding_count"] = 1
-                    with mock.patch.object(sys, "argv", ["fuzz.py"]), \
+                    with mock.patch.object(sys, "argv", ["fuzz.py", "--thread-count", "1"]), \
                          mock.patch.object(sys, "platform", "darwin"), \
                          mock.patch.dict(main.__globals__, ROOT=root, WORK=root, CORPUS=root / ".local/fuzz/corpus",
                                          prepare=lambda _environment: target, run=mock.Mock(),
@@ -144,6 +159,7 @@ class FuzzGateTests(unittest.TestCase):
                     identity = json.loads(summary_path.with_name("verification.json").read_text())
                     self.assertEqual(identity["gate_passed"], process_exit == 0 and not finding)
                     self.assertEqual(identity["process_exit"], process_exit)
+                    self.assertEqual(identity["thread_count"], 1)
                     self.assertEqual(identity["version"], "0.7.4")
                     self.assertEqual(identity["revision"], "a" * 40)
                     self.assertEqual(identity["target_sha256"]["VERSION"],

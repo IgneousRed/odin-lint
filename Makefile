@@ -33,12 +33,13 @@ verify: lint test
 
 FUZZ_BUDGET ?= 60
 FUZZ_SEED ?= 1
+FUZZ_THREADS ?= 2
 
 fuzz-prepare:
 	ODIN="$(ODIN)" ODIN_FLAGS="$(ODIN_FLAGS)" $(PYTHON) scripts/fuzz.py --prepare-only
 
 fuzz: lint
-	./scripts/dev --profile fuzz env ODIN_FLAGS="$(ODIN_FLAGS)" $(PYTHON) scripts/fuzz.py --budget $(FUZZ_BUDGET) --seed $(FUZZ_SEED)
+	./scripts/dev --profile fuzz env ODIN_FLAGS="$(ODIN_FLAGS)" $(PYTHON) scripts/fuzz.py --budget $(FUZZ_BUDGET) --seed $(FUZZ_SEED) --thread-count $(FUZZ_THREADS)
 
 check-deps:
 	./scripts/check-deps

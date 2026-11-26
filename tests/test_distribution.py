@@ -82,7 +82,8 @@ class DistributionTests(unittest.TestCase):
             environment = {**os.environ, "ODIN_LINT_CACHE": str(cache), "GIT_CONFIG_COUNT": "1",
                            "GIT_CONFIG_KEY_0": f"url.{remote.as_uri()}.insteadOf",
                            "GIT_CONFIG_VALUE_0": "https://github.com/odin-lint-test/odin-lint.git",
-                           "GIT_TERMINAL_PROMPT": "0", "PYTHONDONTWRITEBYTECODE": "1"}
+                           "GIT_TERMINAL_PROMPT": "0", "PYTHONDONTWRITEBYTECODE": "1",
+                           "ODIN_LINT_THREAD_COUNT": "1"}
             command = [sys.executable, str(runner), str(lock)]
             built = subprocess.run([*command, "--version"], cwd=consumer, env=environment, capture_output=True, text=True)
             self.assertEqual(built.returncode, 0, built.stderr)
@@ -136,13 +137,13 @@ class DistributionTests(unittest.TestCase):
             tools.mkdir()
             ready.mkdir()
             compiler = tools / "odin"
-            compiler.write_text("#!/usr/bin/env python3\n" + '''import os,sys,time
+            compiler.write_text("#!/usr/bin/env python3\n" + '''import json,os,sys,time
 from pathlib import Path
 if sys.argv[1] == "version":
     print("odin version dev-2026-11:9a6991685")
 else:
     ready = Path(os.environ["TEST_READY"])
-    (ready / str(os.getpid())).touch()
+    (ready / str(os.getpid())).write_text(json.dumps(sys.argv[1:]))
     deadline = time.monotonic() + 10
     while len(list(ready.iterdir())) < 2:
         if time.monotonic() > deadline: raise SystemExit("second build did not arrive")
@@ -162,7 +163,8 @@ elif "rev-parse" in sys.argv: print("0" * 40)
             lock = root / "lock.json"
             lock.write_text(json.dumps({"repository": "owner/repo", "revision": "0" * 40}), encoding="utf-8")
             environment = {**os.environ, "PATH": str(tools) + os.pathsep + os.environ["PATH"],
-                           "ODIN": str(compiler), "ODIN_LINT_CACHE": str(cache), "TEST_READY": str(ready)}
+                           "ODIN": str(compiler), "ODIN_LINT_CACHE": str(cache), "TEST_READY": str(ready),
+                           "ODIN_LINT_THREAD_COUNT": "1"}
             command = [sys.executable, str(PROJECT / "scripts/run-odin-lint.py"), str(lock)]
             children = [subprocess.Popen(command, env=environment, stdout=subprocess.PIPE,
                                          stderr=subprocess.PIPE, text=True) for _ in range(2)]
@@ -172,6 +174,10 @@ elif "rev-parse" in sys.argv: print("0" * 40)
                     self.assertEqual(child.returncode, 0, stderr)
                     self.assertEqual(stdout, "complete\n")
                 self.assertEqual(len(list(ready.iterdir())), 2)
+                for observed in ready.iterdir():
+                    arguments = json.loads(observed.read_text())
+                    self.assertEqual(arguments[:5], ["build", "src", "-debug", "-o:speed", "-thread-count:1"])
+                    self.assertEqual(sum(arg.startswith("-thread-count:") for arg in arguments), 1)
                 self.assertEqual(len(list(cache.iterdir())), 1)
             finally:
                 for child in children:
@@ -180,6 +186,10 @@ elif "rev-parse" in sys.argv: print("0" * 40)
                     child.wait()
 
     def test_cache_identity_separates_incompatible_builds(self):
+        environment = mock.patch.dict(os.environ)
+        environment.start()
+        self.addCleanup(environment.stop)
+        os.environ.pop("ODIN_LINT_THREAD_COUNT", None)
         runner = runpy.run_path(str(PROJECT / "scripts/run-odin-lint.py"))
         with tempfile.TemporaryDirectory(dir=PACKAGE_WORK) as temporary:
             root = Path(temporary).resolve()
@@ -197,6 +207,14 @@ elif "rev-parse" in sys.argv: print("0" * 40)
 
                 first = selected()
                 self.assertEqual(first.parent, root / ".work/odin-lint")
+                with mock.patch.dict(os.environ, ODIN_LINT_THREAD_COUNT="2"):
+                    self.assertEqual(selected().name, first.name)
+                with mock.patch.dict(os.environ, ODIN_LINT_THREAD_COUNT="1"):
+                    single_thread = selected().name
+                    self.assertNotEqual(single_thread, first.name)
+                    self.assertEqual(selected().name, single_thread)
+                with mock.patch.dict(os.environ, ODIN_LINT_THREAD_COUNT="4"):
+                    self.assertNotIn(selected().name, (first.name, single_thread))
                 relocated = root / "same-compiler"
                 shutil.copyfile(compiler, relocated)
                 with mock.patch("shutil.which", return_value=str(relocated)):
@@ -220,6 +238,22 @@ elif "rev-parse" in sys.argv: print("0" * 40)
                 with mock.patch.dict(os.environ, {"ODIN_LINT_CACHE": "relative-cache"}):
                     with self.assertRaisesRegex(ValueError, "absolute directory"):
                         selected()
+
+    def test_invalid_thread_selection_fails_before_compiler_or_cache_use(self):
+        runner = runpy.run_path(str(PROJECT / "scripts/run-odin-lint.py"))
+        with tempfile.TemporaryDirectory(dir=PACKAGE_WORK) as temporary:
+            root = Path(temporary)
+            lock = root / "lock.json"
+            lock.write_text(json.dumps({"repository": "owner/repo", "revision": "0" * 40}))
+            for value in ("", "0", "-1", "+1", "01", "1.5", "nan", " 1", "1 "):
+                with self.subTest(value=value), \
+                     mock.patch.object(sys, "argv", ["runner", str(lock)]), \
+                     mock.patch.dict(os.environ, ODIN_LINT_THREAD_COUNT=value), \
+                     mock.patch("shutil.which") as compiler:
+                    with self.assertRaisesRegex(ValueError, "positive integer"):
+                        runner["main"]()
+                    compiler.assert_not_called()
+                    self.assertFalse((root / ".work").exists())
 
     def test_compiler_pin_is_enforced_before_cache_or_git_use(self):
         runner = runpy.run_path(str(PROJECT / "scripts" / "run-odin-lint.py"))

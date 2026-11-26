@@ -56,7 +56,7 @@ class CanonicalPackageTests(unittest.TestCase):
             commands = [json.loads(line) for line in events.read_text().splitlines()] if events.exists() else []
             return result, commands
 
-    def test_checks_use_invocation_cores_and_keep_every_required_flag(self):
+    def test_compiler_phases_use_invocation_cores_and_keep_every_required_flag(self):
         for cores in ("1", "3"):
             with self.subTest(cores=cores):
                 result, commands = self.phase(cores)
@@ -70,7 +70,7 @@ class CanonicalPackageTests(unittest.TestCase):
                 self.assertIn("-strict-style-packages:src,effects,functions,state", commands[1])
                 self.assertIn("-vet-unused-procedures", commands[2])
                 self.assertIn("-vet-packages:src,effects,state", commands[2])
-                self.assertEqual(commands[3][:5], ["build", "src", "-debug", "-o:speed", "-thread-count:2"])
+                self.assertEqual(commands[3][:5], ["build", "src", "-debug", "-o:speed", "-thread-count:" + cores])
                 self.assertEqual(commands[3][-1], "-out:odin-lint")
 
     def test_invalid_core_counts_fail_before_the_first_compiler_call(self):

@@ -1,5 +1,20 @@
 # Release notes
 
+## Unreleased
+
+Updates the optional pinned fuzzer to odin-fuzz 0.5.0 and forwards its supported
+positive target compiler thread count through `FUZZ_THREADS` or the direct
+driver's `--thread-count`. Verification records retain the selected count.
+
+The standalone runner accepts `ODIN_LINT_THREAD_COUNT` for positive per-invocation
+selection. Its default remains two threads, with all other compiler flags and
+checks unchanged. Cache identity includes the actual selected flag; the default
+retains its existing key while other counts cannot reuse incompatible entries.
+The canonical Nix recipe uses its already-validated `NIX_BUILD_CORES` for the
+build as well as both compiler checks, preserving every other compiler flag.
+The required Odin compiler, lint policy and native CLI are unchanged. Existing
+release tags and consumer pins remain fixed until an explicit source upgrade.
+
 ## 0.7.7 — 2026-11-25
 
 Publishes a fresh source snapshot without prior ancestry or historical release

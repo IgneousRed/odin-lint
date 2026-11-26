@@ -194,9 +194,14 @@ under `odin test`. All other vet checks still cover those sources.
 `SIMPLIFY001` says `inline NAME: one call within the package` and remains an
 error contributing to exit `1`; its eligibility conditions are unchanged.
 
-Compiler invocations default to two worker threads. Odin tests use one worker,
+Make and standalone runner compiler invocations default to two worker threads;
+Nix packages use the invocation's positive `NIX_BUILD_CORES`. Odin tests use one worker,
 a fixed seed, and fail on memory-tracker errors. Tests assert correctness and
 diagnostics, with no timings, throughput benchmarks, or performance thresholds.
+
+The [single-thread verification example](docs/fuzzing.md) selects one thread per
+invocation for compiler checks, package realization, fuzz targets and standalone
+runner builds without changing their defaults or locked compiler paths.
 
 See [fuzzing](docs/fuzzing.md) for LLVM setup, isolated input projects, persistent
 corpus storage and the required precommit fuzz gate.

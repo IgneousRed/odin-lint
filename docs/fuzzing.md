@@ -30,14 +30,28 @@ No Python packages or sibling checkout are required.
 ./scripts/dev --profile fuzz python3 scripts/fuzz.py --budget 60 # Direct driver
 ```
 
+`FUZZ_THREADS` selects the target compiler's positive thread count (default `2`).
+The direct driver accepts `--thread-count`; the selected value is forwarded to
+both LLVM-IR and fallback ASan builds and retained in `verification.json`.
+Seed compiler checks retain their separate per-invocation `ODIN_FLAGS`. To run
+every compiler path with one thread, including the standalone distribution tests:
+
+```sh
+NIX_CONFIG='cores = 1' ODIN_LINT_THREAD_COUNT=1 ./scripts/dev make precommit \
+  ODIN_FLAGS=-thread-count:1 FUZZ_THREADS=1
+```
+
+These selections do not change the default compiler settings or substitute the
+locked compiler/scanner. `NIX_CONFIG` applies before initial package realization.
+
 `make fuzz` completes its compiler/self-lint prerequisite in the active environment
 and then enters the optional profile. `make verify` and ordinary setup do not
 realize the fuzzer. `make fuzz-prepare` needs only the declared compiler and may
 run without the fuzzer installed. Linux retains compiler-only preparation and
 obtains its required fuzz evidence from macOS.
 
-Nix packages odin-fuzz 0.4.0 at full commit
-`8e5e8e480a93b3eaa611c8e131341e4edf56c690` from
+Nix packages odin-fuzz 0.5.0 at full commit
+`48ebaa452381da86b2b54b76b4879511a3f2be03` from
 [IgneousRed/odin-fuzz](https://github.com/IgneousRed/odin-fuzz), using the fixed
 source hash in `nix/odin-fuzz-source.nix` and its canonical Nix recipe, without
 patches. The canonical package owns the immutable scanner and tool paths;

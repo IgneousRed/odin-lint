@@ -32,6 +32,13 @@ def main():
         raise ValueError("repository must be a GitHub OWNER/REPO")
     if not isinstance(revision, str) or not re.fullmatch(r"[0-9a-f]{40}", revision):
         raise ValueError("revision must be a full lowercase 40-character commit SHA")
+    build_flags = BUILD_FLAGS
+    thread_count = os.environ.get("ODIN_LINT_THREAD_COUNT")
+    if thread_count is not None:
+        if not re.fullmatch(r"[1-9][0-9]*", thread_count):
+            raise ValueError("ODIN_LINT_THREAD_COUNT must be a positive integer without leading zeros")
+        build_flags = (*(flag for flag in BUILD_FLAGS if not flag.startswith("-thread-count:")),
+                       "-thread-count:" + thread_count)
     odin = shutil.which(os.environ.get("ODIN", "odin"))
     if odin is None:
         raise ValueError("Odin is required; install the documented version or set ODIN to its executable")
@@ -44,7 +51,7 @@ def main():
         for chunk in iter(lambda: executable.read(1024 * 1024), b""):
             compiler_hash.update(chunk)
     identity = "\n".join((repository, revision, compiler, compiler_hash.hexdigest(),
-                          sys.platform, platform.machine(), *BUILD_FLAGS))
+                          sys.platform, platform.machine(), *build_flags))
     key = hashlib.sha256(identity.encode()).hexdigest()
     cache_root = os.environ.get("ODIN_LINT_CACHE")
     cache = Path(cache_root) if cache_root else lock_path.parent / ".work" / "odin-lint"
@@ -67,7 +74,7 @@ def main():
             if actual != revision:
                 raise ValueError(f"fetched revision {actual} does not match {revision}")
             built = Path(temporary) / binary.name
-            subprocess.run([odin, "build", "src", *BUILD_FLAGS,
+            subprocess.run([odin, "build", "src", *build_flags,
                             f"-define:ODIN_LINT_REVISION={revision}", f"-out:{built}"],
                            cwd=source, check=True, stdout=sys.stderr)
             try:

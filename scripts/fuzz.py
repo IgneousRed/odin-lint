@@ -132,10 +132,13 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--budget", type=float, default=60)
     parser.add_argument("--seed", type=int, default=1)
+    parser.add_argument("--thread-count", type=int, default=2)
     parser.add_argument("--prepare-only", action="store_true")
     args = parser.parse_args()
     if not math.isfinite(args.budget) or args.budget <= 0:
         parser.error("--budget must be finite and greater than zero")
+    if args.thread_count <= 0:
+        parser.error("--thread-count must be a positive integer")
     environment = locked_setup(not args.prepare_only)
     target = prepare(environment)
     if args.prepare_only:
@@ -149,7 +152,7 @@ def main():
     identity = {"version": (target / "VERSION").read_text().strip(),
                 "revision": source_revision(environment),
                 "odin_fuzz_executable": tool, "project_nix_environment": environment["PROJECT_NIX_ENVIRONMENT"],
-                "budget": args.budget, "seed": args.seed,
+                "budget": args.budget, "seed": args.seed, "thread_count": args.thread_count,
                 "flake_lock_sha256": hashlib.sha256((ROOT / "flake.lock").read_bytes()).hexdigest(),
                 "driver_sha256": hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
                 "target_sha256": source_hashes}
@@ -160,7 +163,8 @@ def main():
                                      dir=WORK, delete=False) as log:
         result = subprocess.run([tool, "explore", str(target),
                                  "--work-dir", str(output), "--corpus-dir", str(CORPUS),
-                                 "--budget", str(args.budget), "--seed", str(args.seed)],
+                                 "--budget", str(args.budget), "--seed", str(args.seed),
+                                 "--thread-count", str(args.thread_count)],
                                 stdout=log, stderr=subprocess.STDOUT, env=environment)
     summaries = set(output.glob("runs/*/summary.json")) - before
     if len(summaries) != 1:

@@ -50,11 +50,11 @@ command runs from any project directory without Python, Git, a source checkout,
 or a cache resolver at runtime. Its compiler checks during packaging do not
 replace the consuming project's compiler gates.
 
-Package compiler checks use Nix's normalized `NIX_BUILD_CORES` concurrency. Set
+Package compiler checks and builds use Nix's normalized `NIX_BUILD_CORES` concurrency. Set
 the Nix cores option per invocation before the outer environment launcher when
 a check-thread limit is required; the setting must cover the initial package
 realization, not only a later command. All vet/style/unused checks remain active.
-The standalone runner and plain package build keep their existing build flags.
+All other compiler and build flags remain unchanged.
 
 Keep the existing payload pin during a setup migration. An explicit upgrade
 changes the source revision, fixed hash and version together after review and
@@ -217,8 +217,20 @@ directory, using speed optimization with debug information and bounds checks
 retained. The extra compilation cost is paid once per cache entry. Only a
 successful binary is atomically installed. The cache key
 includes repository, commit, compiler version and executable digest, OS, CPU
-architecture, and the runner's build flags. Later
-runs need no network while that cache exists, but still need Odin to identify
+architecture, and the runner's build flags.
+
+The runner defaults to two compiler threads. Select a different positive integer
+for one invocation with `ODIN_LINT_THREAD_COUNT`; empty values, signs, leading
+zeros and non-integers fail setup before compiler/cache access. All other build
+flags and compiler identity checks remain fixed:
+
+```sh
+ODIN_LINT_THREAD_COUNT=1 python3 tools/run-odin-lint.py odin-lint.lock.json --version
+```
+
+The effective thread flag is included in the cache key. Unset and explicit `2`
+retain the original cache identity; a different count cannot reuse that binary.
+Later runs need no network while that cache exists, but still need Odin to identify
 the compiler. Downloaded source is removed after building. Deleting
 the selected cache forces a rebuild. Do not cache an executable across different
 compiler/host identities under a manually chosen key.
