@@ -10,8 +10,9 @@ import subprocess
 import sys
 
 
-PUBLIC_ROOTS = {".gitattributes", ".gitignore", "LICENSE", "Makefile",
-                "README.md", "VERSION", "flake.nix", "flake.lock", "odin-fuzz.json"}
+PUBLIC_FILES = {".gitattributes", ".gitignore", "LICENSE", "Makefile",
+                "README.md", "VERSION", "flake.nix", "flake.lock", "odin-fuzz.json",
+                "nix/llvm23/upstream/manifest.json"}
 PUBLIC_DIRECTORIES = {
     ".githooks": {""}, "docs": {".md"}, "src": {".odin"},
     ".github": {".yml", ".yaml"},
@@ -40,9 +41,9 @@ def allowed(path, private=False):
         return False
     if not private and "AGENTS.md" in parts:
         return False
-    roots = PRIVATE_ROOTS if private else PUBLIC_ROOTS
+    files = PRIVATE_ROOTS if private else PUBLIC_FILES
     directories = PRIVATE_DIRECTORIES if private else PUBLIC_DIRECTORIES
-    return (len(parts) == 1 and path in roots or len(parts) > 1
+    return (path in files or len(parts) > 1
             and PurePosixPath(path).suffix in directories.get(parts[0], set()))
 
 

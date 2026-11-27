@@ -15,12 +15,14 @@ GUARD = runpy.run_path(str(PROJECT / "scripts/publication-guard.py"))
 class PublicationTests(unittest.TestCase):
     def test_scopes_reject_reserved_and_unknown_paths(self):
         allowed = GUARD["allowed"]
-        for private, accepted in ((False, ("src/functions/main.odin", "tests/fuzz/aliases.json")),
+        for private, accepted in ((False, ("src/functions/main.odin", "tests/fuzz/aliases.json",
+                                          "nix/llvm23/upstream/manifest.json")),
                                   (True, ("todo/proposal.md", "experiments/graphs/README.md"))):
             for path in accepted:
                 self.assertTrue(allowed(path, private), path)
             for path in (".work/data.md", ".local/data.json", ".private/notes.md", ".vendor/input.md",
-                         "experiments/.local/data.json", "unknown/input.md", "src/program.zip"):
+                         "experiments/.local/data.json", "unknown/input.md", "src/program.zip",
+                         "nix/llvm23/upstream/unreviewed.json", "nix/unreviewed.json"):
                 self.assertFalse(allowed(path, private), path)
         self.assertFalse(allowed("todo/proposal.md"))
         self.assertFalse(allowed("src/main.odin", True))

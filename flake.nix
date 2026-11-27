@@ -49,8 +49,8 @@
                 repository = "NixOS/nixpkgs"; ref = "nixpkgs-unstable"; }
               { name = "odin"; current = toolchain.odin.version; kind = "github-release";
                 repository = "odin-lang/Odin"; }
-              { name = "odin-fuzz"; current = fuzzSource.rev; kind = "github-release";
-                repository = "IgneousRed/odin-fuzz"; }
+              { name = "odin-fuzz"; current = fuzzSource.rev; kind = "github-revision";
+                repository = "IgneousRed/odin-fuzz"; ref = "main"; }
             ] ++ pkgs.lib.optionals (system == "aarch64-darwin") [
               { name = "llvm"; current = "llvmorg-${toolchain.native.version}";
                 kind = "github-release"; repository = "llvm/llvm-project"; }
@@ -78,6 +78,9 @@
         { inherit pkgs toolchain python tools variables unset updates package; };
     in
     {
+      # Lazy component identities for portable native-unit verification/reuse.
+      lib.nativeToolchain = forSystems (system: (environment system false).toolchain);
+
       lib.dependencyCheck = forSystems (system:
         let
           inherit (environment system false) pkgs python updates;

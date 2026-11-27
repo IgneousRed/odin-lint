@@ -15,7 +15,8 @@ into the consuming project's Nix definitions as `odin-lint-package.nix`, then
 call it with an explicit locked payload and the shared compiler. The recipe may
 be newer than the payload: an older published source pin need not contain Nix
 files. For example, use this declaration for 0.7.7, replacing the revision and
-hash placeholders with the full commit and source NAR hash from its release:
+hash placeholders with the full commit and source NAR hash from the verified
+published payload or release handoff:
 
 ```nix
 # nix/odin-lint-source.nix
@@ -58,9 +59,13 @@ All other compiler and build flags remain unchanged.
 
 Keep the existing payload pin during a setup migration. An explicit upgrade
 changes the source revision, fixed hash and version together after review and
-affected verification. Derive update metadata directly from `lintSource.rev`
-with `kind = "github-release"` and `repository = "IgneousRed/odin-lint"`; do not
-maintain a second version list. Run the read-only `scripts/check-deps` before
+affected verification. Derive update metadata directly from `lintSource.rev`.
+For updates published on `main`, use `kind = "github-revision"`,
+`repository = "IgneousRed/odin-lint"` and `ref = "main"`. Use
+`kind = "github-release"` when intentionally following release tags instead.
+Fixed release tags do not move with later `main` commits; neither check changes
+the installed exact pin automatically. Do not maintain a second version list.
+Run the read-only `scripts/check-deps` before
 every commit and report updates without changing locks automatically.
 
 Within odin-lint itself, `./scripts/dev make lint` builds and checks the working

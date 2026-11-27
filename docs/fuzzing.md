@@ -51,7 +51,7 @@ run without the fuzzer installed. Linux retains compiler-only preparation and
 obtains its required fuzz evidence from macOS.
 
 Nix packages odin-fuzz 0.5.0 at full commit
-`48ebaa452381da86b2b54b76b4879511a3f2be03` from
+`ed06f23bea76601e44efc9c5c13e42e54b1b9f14` from
 [IgneousRed/odin-fuzz](https://github.com/IgneousRed/odin-fuzz), using the fixed
 source hash in `nix/odin-fuzz-source.nix` and its canonical Nix recipe, without
 patches. The canonical package owns the immutable scanner and tool paths;
